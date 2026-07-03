@@ -27,6 +27,8 @@ module RAM (
     input   logic           memory_write_n,
     input   logic           no_command_state,
     output  logic           memory_access_ready,
+    // ROM-load (Pocket): read-only tap on the write/read completion state.
+    output  logic           access_complete,
     output  logic           ram_address_select_n,
     // SDRAM
     output  logic   [12:0]  sdram_address,
@@ -372,5 +374,10 @@ module RAM (
 
     assign  memory_access_ready = ((~ram_address_select_n) && ((~memory_read_n) || (~memory_write_n)))
                                         ? (access_ready & ((read_wait_count==0) || (~read_command)) & ((write_wait_count==0) || (~write_command))) : 1'b1;
+
+    // ROM-load (Pocket): a clean per-access "done" pulse for core_top's BIOS
+    // loader. COMPLETE_RAM_RW is reached only after the SDRAM write truly
+    // finishes (refresh-safe) and is independent of the CPU-bus wait throttle.
+    assign  access_complete = (state == COMPLETE_RAM_RW);
 
 endmodule

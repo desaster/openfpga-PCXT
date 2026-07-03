@@ -269,9 +269,16 @@ module core_top (
     assign aux_scl                 = 1'bZ;
     assign vpll_feed               = 1'bZ;
 
-    // Bridge reads: dataslot/config handling wires this up during ROM load.
-    // Tied off until then.
-    always @(*) bridge_rd_data = 32'd0;
+    // Bridge reads: the APF command / data-table window (0xF8xxxxxx) reads back
+    // from core_bridge_cmd; everything else returns 0. ROM-load is write-only over
+    // the bridge, so it contributes no read source here.
+    wire [31:0] cmd_bridge_rd_data;
+    always @(*) begin
+        casex (bridge_addr)
+            32'hF8xxxxxx: bridge_rd_data = cmd_bridge_rd_data;
+            default:      bridge_rd_data = 32'd0;
+        endcase
+    end
 
     // (MiSTer OSD CONF_STR, status bit-map, and build_id include removed;
     //  configuration is the constant `status` above.)
@@ -281,6 +288,9 @@ module core_top (
     // Config register: was the HPS OSD status; now constant Pocket defaults.
     // bit 7 = splash off; all-zero gives CGA on, EMS on, A000 UMB on, BIOS
     // write-protected, 4.77 MHz, no border, full-colour, no audio mix.
+    // NB: CGA/EMS/A000 UMB/OPL2 being "on" is contingent on the ENABLE_* macros in
+    // ap_core.qsf; the `ifndef fallbacks at the top of this file default them off.
+    // The qsf is the source of truth for the feature-enable set.
     wire [63:0] status = 64'h0000_0000_0000_0080;
     wire [7:0]  xtctl;
 
@@ -350,7 +360,7 @@ module core_top (
     assign forced_scandoubler = 1'b0;
     assign buttons            = 2'b00;
 
-    // Keyboard / mouse / joystick land in M2; idle for now.
+    // Keyboard / mouse / joystick not wired yet; idle for now.
     assign ps2_kbd_clk_in     = 1'b1;
     assign ps2_kbd_data_in    = 1'b1;
     assign ps2_mouse_clk_out  = 1'b1;   // CHIPSET mouse input, idle
@@ -360,15 +370,10 @@ module core_top (
     assign joya0 = 16'd0;
     assign joya1 = 16'd0;
 
-    // ROM load (data_loader + APF dataslots) is wired in the ROM-load pass;
-    // idle here, so the BIOS FSM stays in its reset/idle state.
-    assign ioctl_download = 1'b0;
-    assign ioctl_index    = 8'd0;
-    assign ioctl_wr       = 1'b0;
-    assign ioctl_addr     = 25'd0;
-    assign ioctl_data     = 16'd0;
+    // ROM load: data_loader + FIFO + copier drive ioctl_* in the ROM-LOAD
+    // section below; the reused BIOS FSM consumes them.
 
-    // Disk management bus stubbed (softcore lands in M3).
+    // Disk management bus stubbed (no disk softcore yet).
     wire [15:0] mgmt_din;              // CHIPSET readdata output (unused)
     wire [15:0] mgmt_dout = 16'd0;     // master write side -> idle
     wire [15:0] mgmt_addr = 16'd0;
@@ -423,9 +428,157 @@ module core_top (
     );
     // Global power-on reset until both PLLs lock.
     wire RESET = ~pll_locked | ~pll_video_locked;
-    wire reset_wire = RESET | status[0];
+    // ROM-load reset hold: keep the machine in reset while APF streams a slot,
+    // and from power-on until the first load completes, so the CPU never runs
+    // without a BIOS. This mirrors how upstream held reset across the boot
+    // splash window (the BIOS FSM writes via the SDRAM path, which is on the
+    // separate reset_sdram and stays up). Driven in the ROM-load glue below.
+    wire        is_downloading;      // APF slot load active (clk_chipset)
+    wire        load_active;         // is_downloading OR the FIFO still draining
+    reg         bios_ever_loaded = 1'b0;
+    wire reset_wire = RESET | status[0] | load_active | ~bios_ever_loaded;
     wire video_retime_reset = RESET;
     wire reset_sdram_wire = RESET;
+
+    //
+    //////////////////   APF bridge command interface   ////////////////
+    //
+    // core_bridge_cmd handles APF host<->core commands (status, dataslot
+    // request/complete, data table) on the clk_74a bridge domain and drives the
+    // command read window (see the bridge_rd_data mux above). Savestate / RTC /
+    // target-dataslot / on-screen-notify are unused here and tied off; the
+    // dataslot request/complete outputs feed the ROM-load download glue.
+
+    wire        reset_n;   // APF-driven core reset (bridge domain)
+
+    // Status handshake, synchronized into the clk_74a bridge domain.
+    wire pll_locked_74a;
+    synch_3 s_pll_lock (~RESET, pll_locked_74a, clk_74a);
+    wire status_boot_done  = pll_locked_74a;
+    wire status_setup_done = pll_locked_74a;
+    wire status_running    = reset_n;
+
+    // Gate APF write-requests (ROM streaming) until SDRAM init completes.
+    wire initilized_sdram_74a;
+    synch_3 s_sdram_init (initilized_sdram, initilized_sdram_74a, clk_74a);
+
+    wire        dataslot_requestread;
+    wire [15:0] dataslot_requestread_id;
+    wire        dataslot_requestwrite;
+    wire [15:0] dataslot_requestwrite_id;
+    wire [31:0] dataslot_requestwrite_size;
+    wire        dataslot_update;
+    wire [15:0] dataslot_update_id;
+    wire [31:0] dataslot_update_size;
+    wire        dataslot_allcomplete;
+    wire        osnotify_inmenu;
+
+    // Target-dataslot (core-initiated host access) + data table: unused, tied off.
+    wire        target_dataslot_read       = 1'b0;
+    wire        target_dataslot_write      = 1'b0;
+    wire [15:0] target_dataslot_id         = 16'd0;
+    wire [31:0] target_dataslot_slotoffset = 32'd0;
+    wire [31:0] target_dataslot_bridgeaddr = 32'd0;
+    wire [31:0] target_dataslot_length     = 32'd0;
+    wire [9:0]  datatable_addr             = 10'd0;
+    wire        datatable_wren             = 1'b0;
+    wire [31:0] datatable_data             = 32'd0;
+
+    core_bridge_cmd icb (
+        .clk                       (clk_74a),
+        .reset_n                   (reset_n),
+        .bridge_endian_little      (bridge_endian_little),
+        .bridge_addr               (bridge_addr),
+        .bridge_rd                 (bridge_rd),
+        .bridge_rd_data            (cmd_bridge_rd_data),
+        .bridge_wr                 (bridge_wr),
+        .bridge_wr_data            (bridge_wr_data),
+
+        .status_boot_done          (status_boot_done),
+        .status_setup_done         (status_setup_done),
+        .status_running            (status_running),
+
+        .dataslot_requestread      (dataslot_requestread),
+        .dataslot_requestread_id   (dataslot_requestread_id),
+        .dataslot_requestread_ack  (1'b1),
+        .dataslot_requestread_ok   (1'b1),
+
+        .dataslot_requestwrite     (dataslot_requestwrite),
+        .dataslot_requestwrite_id  (dataslot_requestwrite_id),
+        .dataslot_requestwrite_size(dataslot_requestwrite_size),
+        .dataslot_requestwrite_ack (initilized_sdram_74a),
+        .dataslot_requestwrite_ok  (1'b1),
+
+        .dataslot_update           (dataslot_update),
+        .dataslot_update_id        (dataslot_update_id),
+        .dataslot_update_size      (dataslot_update_size),
+
+        .dataslot_allcomplete      (dataslot_allcomplete),
+
+        .rtc_epoch_seconds         (),
+        .rtc_date_bcd              (),
+        .rtc_time_bcd              (),
+        .rtc_valid                 (),
+
+        .savestate_supported       (1'b0),
+        .savestate_addr            (32'd0),
+        .savestate_size            (32'd0),
+        .savestate_maxloadsize     (32'd0),
+
+        .osnotify_inmenu           (osnotify_inmenu),
+
+        .savestate_start           (),
+        .savestate_start_ack       (1'b0),
+        .savestate_start_busy      (1'b0),
+        .savestate_start_ok        (1'b0),
+        .savestate_start_err       (1'b0),
+
+        .savestate_load            (),
+        .savestate_load_ack        (1'b0),
+        .savestate_load_busy       (1'b0),
+        .savestate_load_ok         (1'b0),
+        .savestate_load_err        (1'b0),
+
+        .target_dataslot_read      (target_dataslot_read),
+        .target_dataslot_write     (target_dataslot_write),
+        .target_dataslot_ack       (),
+        .target_dataslot_done      (),
+        .target_dataslot_err       (),
+        .target_dataslot_id        (target_dataslot_id),
+        .target_dataslot_slotoffset(target_dataslot_slotoffset),
+        .target_dataslot_bridgeaddr(target_dataslot_bridgeaddr),
+        .target_dataslot_length    (target_dataslot_length),
+
+        .datatable_addr            (datatable_addr),
+        .datatable_wren            (datatable_wren),
+        .datatable_data            (datatable_data),
+        .datatable_q               ()
+    );
+
+    // ---- ROM-load download tracking ----
+    // dataslot_requestwrite marks the start of an APF->core slot stream;
+    // dataslot_allcomplete marks the end. Track it on the bridge clock, then
+    // sync into the chipset domain for the loader and the reset hold above.
+    reg         is_downloading_74a = 1'b0;
+    reg  [15:0] download_id_74a = 16'd0;
+    always @(posedge clk_74a) begin
+        if (dataslot_requestwrite) begin
+            is_downloading_74a <= 1'b1;
+            download_id_74a    <= dataslot_requestwrite_id;
+        end
+        else if (dataslot_allcomplete)
+            is_downloading_74a <= 1'b0;
+    end
+    synch_3 s_isdl (is_downloading_74a, is_downloading, clk_chipset);
+    wire [15:0] download_id;
+    synch_3 #(.WIDTH(16)) s_dlid (download_id_74a, download_id, clk_chipset);
+
+    reg load_active_d = 1'b0;
+    always @(posedge clk_chipset) begin
+        load_active_d <= load_active;
+        if (load_active_d & ~load_active)   // APF done AND the FIFO fully drained
+            bios_ever_loaded <= 1'b1;
+    end
 
     //////////////////////////////////////////////////////////////////
 
@@ -579,6 +732,83 @@ module core_top (
     end
 
     //
+    /////////////////////   ROM-LOAD (APF -> BIOS FSM)   ////////////////////
+    //
+    // APF streams the BIOS slot into the 0x1xxxxxxx bridge window; data_loader
+    // turns that into 16-bit (addr,data) writes on clk_chipset. APF can't be
+    // backpressured, so a FIFO captures every write; the copier then feeds the
+    // reused BIOS-load FSM as an ioctl stream, honoring its ioctl_wait.
+    wire        dl_wr;
+    wire [27:0] dl_addr;
+    wire [15:0] dl_data;
+
+    data_loader #(
+        .ADDRESS_MASK_UPPER_4 (4'h1),
+        .ADDRESS_SIZE         (28),
+        .OUTPUT_WORD_SIZE     (2),
+        .WRITE_MEM_CLOCK_DELAY(16)
+    ) rom_data_loader (
+        .clk_74a             (clk_74a),
+        .clk_memory          (clk_chipset),
+        .bridge_wr           (bridge_wr),
+        .bridge_endian_little(bridge_endian_little),
+        .bridge_addr         (bridge_addr),
+        .bridge_wr_data      (bridge_wr_data),
+        .write_en            (dl_wr),
+        .write_addr          (dl_addr),
+        .write_data          (dl_data)
+    );
+
+    // Decoupling FIFO (same clk_chipset domain), entry = {addr[24:0], data[15:0]}.
+    // 256 deep: generous headroom; the handshake loader keeps pace so it stays
+    // shallow. An overflow would drop a write (and fail POST), but cannot happen
+    // here: the consumer keeps pace and load_active holds reset until it drains.
+    localparam RLF_AW = 8;
+    reg  [40:0]     romfifo [0:(1<<RLF_AW)-1];
+    reg  [RLF_AW:0] rlf_wptr = 0;
+    reg  [RLF_AW:0] rlf_rptr = 0;
+    wire            rlf_empty = (rlf_wptr == rlf_rptr);
+    wire            rlf_full  = (rlf_wptr[RLF_AW-1:0] == rlf_rptr[RLF_AW-1:0])
+                              && (rlf_wptr[RLF_AW] != rlf_rptr[RLF_AW]);
+    wire [40:0]     rlf_head  = romfifo[rlf_rptr[RLF_AW-1:0]];
+    reg             rlf_pop;
+
+    // Drain gate: keep loading until APF is done AND the FIFO is emptied, so the
+    // tail of the ROM cannot be lost if allcomplete races ahead of the last write.
+    assign load_active = is_downloading | ~rlf_empty;
+
+    always @(posedge clk_chipset) begin
+        if (dl_wr && ~rlf_full) begin
+            romfifo[rlf_wptr[RLF_AW-1:0]] <= {dl_addr[24:0], dl_data};
+            rlf_wptr <= rlf_wptr + 1'b1;
+        end
+        if (rlf_pop && ~rlf_empty)
+            rlf_rptr <= rlf_rptr + 1'b1;
+    end
+
+    // Copier: present the FIFO head to the BIOS FSM as ioctl, honoring ioctl_wait.
+    assign ioctl_download = load_active;
+    assign ioctl_index    = (download_id == 16'd2) ? 8'd2 : 8'd0;  // XT-IDE->2, BIOS->0
+    assign ioctl_addr     = rlf_head[40:16];
+    assign ioctl_data     = rlf_head[15:0];
+    reg ioctl_wr_r = 1'b0;
+    assign ioctl_wr = ioctl_wr_r;
+
+    always @(posedge clk_chipset) begin
+        rlf_pop <= 1'b0;
+        if (~load_active)
+            ioctl_wr_r <= 1'b0;
+        else if (ioctl_wr_r) begin
+            if (ioctl_wait) begin        // FSM latched the presented word
+                ioctl_wr_r <= 1'b0;
+                rlf_pop    <= 1'b1;
+            end
+        end
+        else if (~ioctl_wait && ~rlf_empty)
+            ioctl_wr_r <= 1'b1;
+    end
+
+    //
     ///////////////////////   BIOS LOADER   ////////////////////////////
     //
 
@@ -700,17 +930,22 @@ module core_top (
                     bios_write_byte_cnt <= bios_write_byte_cnt;
                     tandy_bios_write    <= select_tandy;
                     ioctl_wait          <= 1'b1;
-                    bios_write_wait_cnt <= bios_write_wait_cnt + 'h1;
 
-                    if (bios_write_wait_cnt != 'd20)
+                    // Handshake: hold the external write asserted until the RAM
+                    // controller reports the access complete (ram_rw_complete), or
+                    // a safety timeout (a hang backstop; a normal write completes in
+                    // a few cycles and must never reach it, else that byte is lost).
+                    if (ram_rw_complete || (bios_write_wait_cnt == 8'd63))
                     begin
-                        bios_write_n        <= 1'b0;
-                        bios_load_state     <= 4'h02;
+                        bios_write_n        <= 1'b1;
+                        bios_write_wait_cnt <= 8'h0;
+                        bios_load_state     <= 4'h03;
                     end
                     else
                     begin
-                        bios_write_n        <= 1'b1;
-                        bios_load_state     <= 4'h03;
+                        bios_write_n        <= 1'b0;
+                        bios_write_wait_cnt <= bios_write_wait_cnt + 8'h1;
+                        bios_load_state     <= 4'h02;
                     end
                 end
                 4'h03:
@@ -722,13 +957,16 @@ module core_top (
                     bios_write_n        <= 1'b1;
                     bios_write_byte_cnt <= bios_write_byte_cnt;
                     tandy_bios_write    <= 1'b0;
+                    bios_write_n        <= 1'b1;
                     ioctl_wait          <= 1'b1;
-                    bios_write_wait_cnt <= bios_write_wait_cnt + 'h1;
+                    bios_write_wait_cnt <= bios_write_wait_cnt + 8'h1;
 
-                    if (bios_write_wait_cnt != 'h40)
-                        bios_load_state     <= 4'h03;
-                    else
+                    // Short settle so the RAM controller returns to IDLE (and
+                    // ram_rw_complete drops) before the next byte write.
+                    if (bios_write_wait_cnt >= 8'd4)
                         bios_load_state     <= 4'h04;
+                    else
+                        bios_load_state     <= 4'h03;
                 end
                 4'h04:
                 begin
@@ -1099,8 +1337,12 @@ module core_top (
 		.crt_h_offset                       (status[49:46]),
 		.crt_v_offset                       (status[52:50]),
 		.vsync_width_osd                    (vsync_width_osd),
-		.hsync_width_osd                    (hsync_width_osd)
+		.hsync_width_osd                    (hsync_width_osd),
+		.ram_rw_complete                    (ram_rw_complete)
 	);
+
+    // CHIPSET per-access "done" pulse (COMPLETE_RAM_RW); drives the ROM-load FSM.
+    wire        ram_rw_complete;
 
     // ---- SDRAM boundary: chipset controller -> Pocket dram_* pins ----
     // CHIPSET drives these (formerly top-level ports); pass straight through.
@@ -1229,7 +1471,7 @@ module core_top (
     end
 
     // ---- Audio: 16-bit signed mix -> I2S (Pocket audio codec) ----
-    // (MiSTer AUDIO_MIX stereo-blend dropped; that's M4 audio polish.)
+    // (the MiSTer AUDIO_MIX stereo-blend is dropped; not reimplemented here.)
     wire [15:0] audio_l = pause_core ? 16'd0 : (status[37:36] ? cmp_l : out_l);
     wire [15:0] audio_r = pause_core ? 16'd0 : (status[37:36] ? cmp_r : out_r);
 
@@ -1296,7 +1538,7 @@ module core_top (
     //
     ///////////////////////   MMC     ///////////////////////
     //
-    // SPI/MMC storage path unused (M5 uses the managed-SD ide.v backend).
+    // SPI/MMC storage path unused; the managed-SD ide.v backend is used instead.
     wire [1:0] use_mmc = 2'b00;
     wire spi_clk, spi_cs, spi_mosi;     // CHIPSET outputs, no external pins
     wire spi_miso = 1'b0;
@@ -1307,7 +1549,7 @@ module core_top (
     // Lean CGA -> Pocket scaler. The MiSTer output chain (monochrome filter,
     // video_mixer / scandoubler / HQ2x / gamma, the HGC path, jtframe_credits and
     // the HDMI clock retime) is dropped; the Pocket scaler does scaling/filtering.
-    // Correct DE/porches and display modes are the M2 video spike.
+    // Correct DE/porches and display modes are not finalized here yet.
     //
     // r/g/b/HSync/VSync/HBlank/VBlank leave CHIPSET on the clk_28_636 dot-clock
     // domain. clk_pix (14.318 MHz) is 28.636/2 off the same PLL, so it is phase-

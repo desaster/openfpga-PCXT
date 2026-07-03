@@ -172,7 +172,10 @@ module CHIPSET #(
         input   logic   [3:0]   crt_h_offset,
         input   logic   [2:0]   crt_v_offset,
         input   logic   [2:0]   vsync_width_osd,
-        input   logic   [2:0]   hsync_width_osd
+        input   logic   [2:0]   hsync_width_osd,
+        // ROM-load (Pocket): expose the RAM access-complete pulse so core_top's
+        // BIOS loader can pace on the real SDRAM write instead of a fixed delay.
+        output  logic           ram_rw_complete
 
     );
 
@@ -420,6 +423,7 @@ module CHIPSET #(
         .memory_write_n                     (memory_write_n),
         .no_command_state                   (no_command_state),
         .memory_access_ready                (memory_access_ready),
+        .access_complete                    (ram_rw_complete),
         .ram_address_select_n               (ram_address_select_n),
         .sdram_address                      (sdram_address),
         .sdram_cke                          (sdram_cke),
