@@ -764,7 +764,8 @@ set_global_assignment -name VERILOG_FILE core/core_bridge_cmd.v
 set_global_assignment -name SYSTEMVERILOG_FILE core/data_loader.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/sound_i2s.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/sync_fifo.sv
-set_global_assignment -name SDC_FILE core/core_constraints.sdc
+# core_constraints.sdc is pulled in by apf_constraints.sdc via read_sdc
+# (after derive_pll_clocks); do not add it as an SDC_FILE here too.
 
 # Core clocking: system PLL (50/100 MHz + SDRAM clock) and video PLL (CGA pixel).
 set_global_assignment -name VERILOG_FILE core/pll.v

@@ -331,7 +331,6 @@ module core_top (
     wire std_hsyncwidth;
     wire pause_core;
     wire swap_video;
-    wire swap_video_eff = `ENABLE_HGC ? (`ENABLE_CGA ? swap_video : (`ENABLE_TANDY_VIDEO ? 1'b0 : 1'b1)) : 1'b0;
 
     always @(posedge clk_chipset)
     begin
@@ -382,14 +381,11 @@ module core_top (
     ///////////////////////   CLOCKS   /////////////////////////////
     //
 
-    wire clk_sys;
     wire pll_locked;
 
     wire clk_100;
     wire clk_28_636;
     wire clk_57_272;
-    wire clk_114_544;
-    wire clk_video_out_ps;
     reg clk_14_318 = 1'b0;
     wire clk_cpu;
     logic cpu_ce_posedge;
