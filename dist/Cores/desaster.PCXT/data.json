@@ -1,0 +1,17 @@
+{
+  "data": {
+    "magic": "APF_VER_1",
+    "data_slots": [
+      {
+        "name": "BIOS",
+        "id": 1,
+        "required": true,
+        "parameters": "0x203",
+        "filename": "boot.bin",
+        "extensions": ["rom", "bin"],
+        "address": "0x10000000",
+        "size_maximum": "0x10000"
+      }
+    ]
+  }
+}
