@@ -25,6 +25,7 @@ PLLJ_PLLSPE_INFO.txt
 *.ppf
 *.ddb
 build_id.v
+build_id.mif
 c5_pin_model_dump.txt
 *.sopcinfo
 *.csv
@@ -37,4 +38,8 @@ c5_pin_model_dump.txt
 *.xml
 *_netlist
 *.cdf
+*.o
+src/firmware/firmware.vh
+src/firmware/firmware.elf
+src/firmware/firmware.bin
 **/.DS_Store
