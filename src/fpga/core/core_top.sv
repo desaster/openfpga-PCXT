@@ -56,266 +56,232 @@
 `define ENABLE_EMS 0
 `endif
 
-module emu
-    (
-        //Master input clock
-        input         CLK_50M,
+module core_top (
 
-        //Async reset from top-level module.
-        //Can be used as initial reset.
-        input         RESET,
+    //
+    // physical connections
+    //
 
-        //Must be passed to hps_io module
-        inout  [48:0] HPS_BUS,
+    // clock inputs, 74.25 MHz (not phase aligned; treat as async domains)
+    input  wire         clk_74a,
+    input  wire         clk_74b,
 
-        //Base video clock. Usually equals to CLK_SYS.
-        output        CLK_VIDEO,
+    // cartridge interface (unused)
+    inout  wire [7:0]   cart_tran_bank2,
+    output wire         cart_tran_bank2_dir,
+    inout  wire [7:0]   cart_tran_bank3,
+    output wire         cart_tran_bank3_dir,
+    inout  wire [7:0]   cart_tran_bank1,
+    output wire         cart_tran_bank1_dir,
+    inout  wire [7:4]   cart_tran_bank0,
+    output wire         cart_tran_bank0_dir,
+    inout  wire         cart_tran_pin30,
+    output wire         cart_tran_pin30_dir,
+    output wire         cart_pin30_pwroff_reset,
+    inout  wire         cart_tran_pin31,
+    output wire         cart_tran_pin31_dir,
 
-        //Multiple resolutions are supported using different CE_PIXEL rates.
-        //Must be based on CLK_VIDEO
-        output        CE_PIXEL,
+    // infrared
+    input  wire         port_ir_rx,
+    output wire         port_ir_tx,
+    output wire         port_ir_rx_disable,
 
-        //Video aspect ratio for HDMI. Most retro systems have ratio 4:3.
-        //if VIDEO_ARX[12] or VIDEO_ARY[12] is set then [11:0] contains scaled size instead of aspect ratio.
-        output [12:0] VIDEO_ARX,
-        output [12:0] VIDEO_ARY,
+    // GBA link port
+    inout  wire         port_tran_si,
+    output wire         port_tran_si_dir,
+    inout  wire         port_tran_so,
+    output wire         port_tran_so_dir,
+    inout  wire         port_tran_sck,
+    output wire         port_tran_sck_dir,
+    inout  wire         port_tran_sd,
+    output wire         port_tran_sd_dir,
 
-        output  [7:0] VGA_R,
-        output  [7:0] VGA_G,
-        output  [7:0] VGA_B,
-        output        VGA_HS,
-        output        VGA_VS,
-        output        VGA_DE,    // = ~(VBlank | HBlank)
-        output        VGA_F1,
-        output [1:0]  VGA_SL,
-        output        VGA_SCALER, // Force VGA scaler
-        output        VGA_DISABLE,
+    // cellular PSRAM 0 and 1 (unused)
+    output wire [21:16] cram0_a,
+    inout  wire [15:0]  cram0_dq,
+    input  wire         cram0_wait,
+    output wire         cram0_clk,
+    output wire         cram0_adv_n,
+    output wire         cram0_cre,
+    output wire         cram0_ce0_n,
+    output wire         cram0_ce1_n,
+    output wire         cram0_oe_n,
+    output wire         cram0_we_n,
+    output wire         cram0_ub_n,
+    output wire         cram0_lb_n,
+    output wire [21:16] cram1_a,
+    inout  wire [15:0]  cram1_dq,
+    input  wire         cram1_wait,
+    output wire         cram1_clk,
+    output wire         cram1_adv_n,
+    output wire         cram1_cre,
+    output wire         cram1_ce0_n,
+    output wire         cram1_ce1_n,
+    output wire         cram1_oe_n,
+    output wire         cram1_we_n,
+    output wire         cram1_ub_n,
+    output wire         cram1_lb_n,
 
-        input  [11:0] HDMI_WIDTH,
-        input  [11:0] HDMI_HEIGHT,
-        output        HDMI_FREEZE,
-        output        HDMI_BLACKOUT,
-	output        HDMI_BOB_DEINT,
+    // SDRAM, 16-bit: the PC's main memory + BIOS live here
+    output wire [12:0]  dram_a,
+    output wire [1:0]   dram_ba,
+    inout  wire [15:0]  dram_dq,
+    output wire [1:0]   dram_dqm,
+    output wire         dram_clk,
+    output wire         dram_cke,
+    output wire         dram_ras_n,
+    output wire         dram_cas_n,
+    output wire         dram_we_n,
 
-		`ifdef MISTER_FB
-        // Use framebuffer in DDRAM (USE_FB=1 in qsf)
-        // FB_FORMAT:
-        //    [2:0] : 011=8bpp(palette) 100=16bpp 101=24bpp 110=32bpp
-        //    [3]   : 0=16bits 565 1=16bits 1555
-        //    [4]   : 0=RGB  1=BGR (for 16/24/32 modes)
-        //
-        // FB_STRIDE either 0 (rounded to 256 bytes) or multiple of pixel size (in bytes)
-        output        FB_EN,
-        output  [4:0] FB_FORMAT,
-        output [11:0] FB_WIDTH,
-        output [11:0] FB_HEIGHT,
-        output [31:0] FB_BASE,
-        output [13:0] FB_STRIDE,
-        input         FB_VBL,
-        input         FB_LL,
-        output        FB_FORCE_BLANK,
+    // SRAM (unused)
+    output wire [16:0]  sram_a,
+    inout  wire [15:0]  sram_dq,
+    output wire         sram_oe_n,
+    output wire         sram_we_n,
+    output wire         sram_ub_n,
+    output wire         sram_lb_n,
 
-		`ifdef MISTER_FB_PALETTE
-        // Palette control for 8bit modes.
-        // Ignored for other video modes.
-        output        FB_PAL_CLK,
-        output  [7:0] FB_PAL_ADDR,
-        output [23:0] FB_PAL_DOUT,
-        input  [23:0] FB_PAL_DIN,
-        output        FB_PAL_WR,
-		`endif
-		`endif
+    // vblank from dock
+    input  wire         vblank,
 
-        output        LED_USER,  // 1 - ON, 0 - OFF.
+    // debug UART + solderable user pads
+    output wire         dbg_tx,
+    input  wire         dbg_rx,
+    output wire         user1,
+    input  wire         user2,
 
-        // b[1]: 0 - LED status is system status OR'd with b[0]
-        //       1 - LED status is controled solely by b[0]
-        // hint: supply 2'b00 to let the system control the LED.
-        output  [1:0] LED_POWER,
-        output  [1:0] LED_DISK,
+    // RFU I2C + PLL feed
+    inout  wire         aux_sda,
+    output wire         aux_scl,
+    output wire         vpll_feed,
 
-        // I/O board button press simulation (active high)
-        // b[1]: user button
-        // b[0]: osd button
-        output  [1:0] BUTTONS,
+    //
+    // logical connections
+    //
 
-        input         CLK_AUDIO, // 24.576 MHz
-        output [15:0] AUDIO_L,
-        output [15:0] AUDIO_R,
-        output        AUDIO_S,   // 1 - signed audio samples, 0 - unsigned
-        output  [1:0] AUDIO_MIX, // 0 - no mix, 1 - 25%, 2 - 50%, 3 - 100% (mono)
+    // video + audio output to the scaler
+    output wire [23:0]  video_rgb,
+    output wire         video_rgb_clock,
+    output wire         video_rgb_clock_90,
+    output wire         video_de,
+    output wire         video_skip,
+    output wire         video_vs,
+    output wire         video_hs,
 
-        //ADC
-        inout   [3:0] ADC_BUS,
+    output wire         audio_mclk,
+    input  wire         audio_adc,
+    output wire         audio_dac,
+    output wire         audio_lrck,
 
-        //SD-SPI
-        output        SD_SCK,
-        output        SD_MOSI,
-        input         SD_MISO,
-        output        SD_CS,
-        input         SD_CD,
+    // bridge bus (synchronous to clk_74a)
+    output wire         bridge_endian_little,
+    input  wire [31:0]  bridge_addr,
+    input  wire         bridge_rd,
+    output reg  [31:0]  bridge_rd_data,
+    input  wire         bridge_wr,
+    input  wire [31:0]  bridge_wr_data,
 
-        //High latency DDR3 RAM interface
-        //Use for non-critical time purposes
-        output        DDRAM_CLK,
-        input         DDRAM_BUSY,
-        output  [7:0] DDRAM_BURSTCNT,
-        output [28:0] DDRAM_ADDR,
-        input  [63:0] DDRAM_DOUT,
-        input         DDRAM_DOUT_READY,
-        output        DDRAM_RD,
-        output [63:0] DDRAM_DIN,
-        output  [7:0] DDRAM_BE,
-        output        DDRAM_WE,
+    // controller data (4 players)
+    input  wire [15:0]  cont1_key,
+    input  wire [15:0]  cont2_key,
+    input  wire [15:0]  cont3_key,
+    input  wire [15:0]  cont4_key,
+    input  wire [31:0]  cont1_joy,
+    input  wire [31:0]  cont2_joy,
+    input  wire [31:0]  cont3_joy,
+    input  wire [31:0]  cont4_joy,
+    input  wire [15:0]  cont1_trig,
+    input  wire [15:0]  cont2_trig,
+    input  wire [15:0]  cont3_trig,
+    input  wire [15:0]  cont4_trig
+);
 
-        //SDRAM interface with lower latency
-        output        SDRAM_CLK,
-        output        SDRAM_CKE,
-        output [12:0] SDRAM_A,
-        output  [1:0] SDRAM_BA,
-        inout  [15:0] SDRAM_DQ,
-        output        SDRAM_DQML,
-        output        SDRAM_DQMH,
-        output        SDRAM_nCS,
-        output        SDRAM_nCAS,
-        output        SDRAM_nRAS,
-        output        SDRAM_nWE,
+    // ------------------------------------------------------------------
+    // Unused Pocket physical interfaces, tied to safe states.
+    // (SDRAM/dram_*, video_*, audio_* are driven by the core below.)
+    // ------------------------------------------------------------------
 
-		`ifdef MISTER_DUAL_SDRAM
-        //Secondary SDRAM
-        //Set all output SDRAM_* signals to Z ASAP if SDRAM2_EN is 0
-        input         SDRAM2_EN,
-        output        SDRAM2_CLK,
-        output [12:0] SDRAM2_A,
-        output  [1:0] SDRAM2_BA,
-        inout  [15:0] SDRAM2_DQ,
-        output        SDRAM2_nCS,
-        output        SDRAM2_nCAS,
-        output        SDRAM2_nRAS,
-        output        SDRAM2_nWE,
-		`endif
+    // IR off, receiver disabled to save power
+    assign port_ir_tx              = 0;
+    assign port_ir_rx_disable      = 1;
 
-        input         UART_CTS,
-        output        UART_RTS,
-        input         UART_RXD,
-        output        UART_TXD,
-        output        UART_DTR,
-        input         UART_DSR,
+    assign bridge_endian_little    = 0;
 
-        // Open-drain User port.
-        // 0 - D+/RX
-        // 1 - D-/TX
-        // 2..6 - USR2..USR6
-        // Set USER_OUT to 1 to read from USER_IN.
-        input   [6:0] USER_IN,
-        output  [6:0] USER_OUT,
+    // cartridge level translators (dir 0:IN 1:OUT), unused
+    assign cart_tran_bank3         = 8'hzz;
+    assign cart_tran_bank3_dir     = 1'b0;
+    assign cart_tran_bank2         = 8'hzz;
+    assign cart_tran_bank2_dir     = 1'b0;
+    assign cart_tran_bank1         = 8'hzz;
+    assign cart_tran_bank1_dir     = 1'b0;
+    assign cart_tran_bank0         = 4'hf;
+    assign cart_tran_bank0_dir     = 1'b1;
+    assign cart_tran_pin30         = 1'b0;
+    assign cart_tran_pin30_dir     = 1'bz;
+    assign cart_pin30_pwroff_reset = 1'b0;
+    assign cart_tran_pin31         = 1'bz;
+    assign cart_tran_pin31_dir     = 1'b0;
 
-        input         OSD_STATUS
-    );
+    // GBA link port: input only
+    assign port_tran_so            = 1'bz;
+    assign port_tran_so_dir        = 1'b0;
+    assign port_tran_si            = 1'bz;
+    assign port_tran_si_dir        = 1'b0;
+    assign port_tran_sck           = 1'bz;
+    assign port_tran_sck_dir       = 1'b0;
+    assign port_tran_sd            = 1'bz;
+    assign port_tran_sd_dir        = 1'b0;
 
-    ///////// Default values for ports not used in this core /////////
+    // cellular PSRAM: unused
+    assign cram0_a                 = 'h0;
+    assign cram0_dq                = {16{1'bZ}};
+    assign cram0_clk               = 0;
+    assign cram0_adv_n             = 1;
+    assign cram0_cre               = 0;
+    assign cram0_ce0_n             = 1;
+    assign cram0_ce1_n             = 1;
+    assign cram0_oe_n              = 1;
+    assign cram0_we_n              = 1;
+    assign cram0_ub_n              = 1;
+    assign cram0_lb_n              = 1;
+    assign cram1_a                 = 'h0;
+    assign cram1_dq                = {16{1'bZ}};
+    assign cram1_clk               = 0;
+    assign cram1_adv_n             = 1;
+    assign cram1_cre               = 0;
+    assign cram1_ce0_n             = 1;
+    assign cram1_ce1_n             = 1;
+    assign cram1_oe_n              = 1;
+    assign cram1_we_n              = 1;
+    assign cram1_ub_n              = 1;
+    assign cram1_lb_n              = 1;
 
-    assign ADC_BUS  = 'Z;
-    //assign USER_OUT = '1;
-    //assign {UART_RTS, UART_TXD, UART_DTR} = 0;
-    assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
-    //assign {SDRAM_DQ, SDRAM_A, SDRAM_BA, SDRAM_CLK, SDRAM_CKE, SDRAM_DQML, SDRAM_DQMH, SDRAM_nWE, SDRAM_nCAS, SDRAM_nRAS, SDRAM_nCS} = 'Z;
-    assign SDRAM_CLK = clk_chipset;
-    assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_DIN, DDRAM_BE, DDRAM_RD, DDRAM_WE} = '0;
+    // SRAM: unused
+    assign sram_a                  = 'h0;
+    assign sram_dq                 = {16{1'bZ}};
+    assign sram_oe_n               = 1;
+    assign sram_we_n               = 1;
+    assign sram_ub_n               = 1;
+    assign sram_lb_n               = 1;
 
-    assign VGA_F1 = 0;
-    assign VGA_SCALER = 0;
-    assign VGA_DISABLE = 0;
-    assign HDMI_FREEZE = 0;
-    assign HDMI_BLACKOUT = 0;
-    assign HDMI_BOB_DEINT = 0;
+    assign dbg_tx                  = 1'bZ;
+    assign user1                   = 1'bZ;
+    assign aux_scl                 = 1'bZ;
+    assign vpll_feed               = 1'bZ;
 
-    assign LED_DISK = 0;
-    assign LED_POWER = 0;
-    assign BUTTONS = 0;
+    // Bridge reads: dataslot/config handling wires this up during ROM load.
+    // Tied off until then.
+    always @(*) bridge_rd_data = 32'd0;
 
-    assign LED_USER = 0;
-    //led fdd_led(clk_cpu, |mgmt_req[7:6], LED_USER);
-
-
-    //////////////////////////////////////////////////////////////////
-    // Status Bit Map:
-    //              Upper                          Lower
-    // 0         1         2         3          4         5         6
-    // 01234567890123456789012345678901 23456789012345678901234567890123
-    // 0123456789ABCDEFGHIJKLMNOPQRSTUV 0123456789ABCDEFGHIJKLMNOPQRSTUV
-    // XXXXX XXXXXXXXXXXXXXXXXXXXXXXXXX XXXXXXXX
-
-	`include "build_id.v"
-
-    localparam CONF_STR_HGC = ((`ENABLE_HGC && `ENABLE_CGA) ? "P1oC,PCXT CGA Graphics,Yes,No;P1oD,PCXT Hercules Graphics,Yes,No;P1O4,PCXT 1st Video,CGA,Hercules;P1-;" : "");
-    localparam CONF_STR_ROM = (`ROM_IS_TANDY ? "P1FC1,ROM,Tandy BIOS:;P1-;" : "P1FC0,ROM,PCXT BIOS:;");
-    localparam CONF_STR_CMS = (`ENABLE_CMS ? "P2OA,C/MS Audio,Enabled,Disabled;" : "");
-    localparam CONF_STR_OPL2 = (`ENABLE_OPL2 ? "P2oAB,OPL2,Adlib 388h,SB FM 388h/228h, Disabled;" : "");
-    localparam CONF_STR_TANDY_AUDIO = (`ENABLE_TANDY_AUDIO ? "P2o23,Tandy Volume,1,2,3,4;" : "");
-    localparam CONF_STR_EMS = (`ENABLE_EMS ? "P3OB,Lo-tech 2MB EMS,Enabled,Disabled;P3OCD,EMS Frame,C000,D000,E000;P3-;" : "");
-    localparam CONF_STR_A000 = (`ENABLE_A000_UMB ? "P3o9,A000 UMB,Enabled,Disabled;P3-;" : "");
-
-    localparam CONF_STR = {
-		`CONF_STR_SYSTEM,
-		"S0,IMGIMAVFD,Floppy A:;",
-		"S1,IMGIMAVFD,Floppy B:;",
-		"OJK,Write Protect,None,A:,B:,A: & B:;",
-		"-;",
-		"S2,VHD,IDE 0-0;",
-		"S3,VHD,IDE 0-1;",
-		"OLM,2nd SD card,Disable,IDE 0-0,IDE 0-1;",
-		"-;",
-		"OHI,CPU Speed,4.77MHz,7.16MHz,9.54MHz,PC/AT 3.5MHz;",
-		"-;",
-		"P1,System & BIOS;",
-		"P1-;",
-		CONF_STR_HGC,
-		"P1O7,Boot Splash Screen,Yes,No;",
-		"P1-;",
-		CONF_STR_ROM,
-		"P1FC2,ROM,EC00 BIOS:;",
-		"P1-;",
-		"P1OUV,BIOS Writable,None,EC00,Main,All;",
-		"P1-;",	
-		"P2,Audio & Video;",
-		"P2-;",
-		CONF_STR_CMS,
-		CONF_STR_OPL2,
-		"P2o01,Speaker Volume,1,2,3,4;",
-		CONF_STR_TANDY_AUDIO,
-		"P2o45,Audio Boost,No,2x,4x;",
-		"P2o67,Stereo Mix,none,25%,50%,100%;",
-		"P2-;",
-		"P2oEH,CRT H offset,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15;",
-		"P2oIK,CRT V offset,0,1,2,3,4,5,6,7;",        
-		"P2oMO,VSync Width,Auto,1,2,3,4,5,6,7;",
-		"P2oPR,HSync Width,Auto,1,2,3,4,5,6,7;",
-        "P2-;",
-		"P2O12,Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%;",
-		"P2O89,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
-		"P2OT,Border,No,Yes;",
-		"P2o8,Composite video,Off,On;",
-		"P2OEG,Display,Full Color,Green,Amber,B&W,Red,Blue,Fuchsia,Purple;",
-		"P2-;",
-		"P3,Hardware;",
-		"P3-;",
-		CONF_STR_EMS,
-		CONF_STR_A000,
-		"P3ONO,Joystick 1, Analog, Digital, Disabled;",
-		"P3OPQ,Joystick 2, Analog, Digital, Disabled;",
-		"P3OR,Sync Joy to CPU Speed,No,Yes;",
-		"P3OS,Swap Joysticks,No,Yes;",
-		"P3-;",	
-		"-;",
-		"R0,Reset & apply settings;",
-		"J,Fire 1,Fire 2;",
-		"V,v",`BUILD_DATE
-	};
+    // (MiSTer OSD CONF_STR, status bit-map, and build_id include removed;
+    //  configuration is the constant `status` above.)
 
     wire forced_scandoubler;
     wire [1:0] buttons;
-    wire [63:0] status;
+    // Config register: was the HPS OSD status; now constant Pocket defaults.
+    // bit 7 = splash off; all-zero gives CGA on, EMS on, A000 UMB on, BIOS
+    // write-protected, 4.77 MHz, no border, full-colour, no audio mix.
+    wire [63:0] status = 64'h0000_0000_0000_0080;
     wire [7:0]  xtctl;
 
     //Keyboard Ps2
@@ -367,81 +333,50 @@ module emu
     wire swap_video;
     wire swap_video_eff = `ENABLE_HGC ? (`ENABLE_CGA ? swap_video : (`ENABLE_TANDY_VIDEO ? 1'b0 : 1'b1)) : 1'b0;
 
-    always @(posedge clk_57_272)
+    always @(posedge clk_chipset)
     begin
         scale_video_ff          <= scale;
         screen_mode_video_ff    <= screen_mode;
         border_video_ff         <= border;
         cga_hw                  <= `ENABLE_CGA ? (~status[44] | tandy_video_mode) : 1'b0;
         hercules_hw             <= `ENABLE_HGC ? (`ENABLE_CGA ? ~status[45] : 1'b1) : 1'b0;
-        VIDEO_ARX               <= (!ar) ? 12'd4 : (ar - 1'd1);
-        VIDEO_ARY               <= (!ar) ? 12'd3 : 12'd0;
     end
 
     always @(posedge clk_chipset)
         hgc_mode_video_ff       <= `ENABLE_HGC ? hgc_mode : 1'b0;
 
-    hps_io #(.CONF_STR(CONF_STR), .PS2DIV(2000), .PS2WE(1), .WIDE(1)) hps_io 
-	(
-		.clk_sys(clk_chipset),
-		.HPS_BUS(HPS_BUS),
-		.EXT_BUS(EXT_BUS),
-		.gamma_bus(gamma_bus),
+    // ------------------------------------------------------------------
+    // Config + input stubs (replacing hps_io / hps_ext).
+    // ------------------------------------------------------------------
+    assign forced_scandoubler = 1'b0;
+    assign buttons            = 2'b00;
 
-		.forced_scandoubler(forced_scandoubler),
+    // Keyboard / mouse / joystick land in M2; idle for now.
+    assign ps2_kbd_clk_in     = 1'b1;
+    assign ps2_kbd_data_in    = 1'b1;
+    assign ps2_mouse_clk_out  = 1'b1;   // CHIPSET mouse input, idle
+    assign ps2_mouse_data_out = 1'b1;
+    assign joy0  = 14'd0;
+    assign joy1  = 14'd0;
+    assign joya0 = 16'd0;
+    assign joya1 = 16'd0;
 
-		.buttons(buttons),
-		.status(status),
-		.status_menumask({status[5]}),
+    // ROM load (data_loader + APF dataslots) is wired in the ROM-load pass;
+    // idle here, so the BIOS FSM stays in its reset/idle state.
+    assign ioctl_download = 1'b0;
+    assign ioctl_index    = 8'd0;
+    assign ioctl_wr       = 1'b0;
+    assign ioctl_addr     = 25'd0;
+    assign ioctl_data     = 16'd0;
 
-		.ps2_kbd_clk_in		(ps2_kbd_clk_out),
-		.ps2_kbd_data_in	(ps2_kbd_data_out),
-		.ps2_kbd_clk_out	(ps2_kbd_clk_in),
-		.ps2_kbd_data_out	(ps2_kbd_data_in),
-
-		.ps2_mouse_clk_out    (ps2_mouse_clk_out),
-		.ps2_mouse_data_out   (ps2_mouse_data_out),
-		.ps2_mouse_clk_in     (ps2_mouse_clk_in),
-		.ps2_mouse_data_in    (ps2_mouse_data_in),
-
-		.joystick_0(joy0),
-		.joystick_1(joy1),
-		.joystick_l_analog_0(joya0),
-		.joystick_l_analog_1(joya1),
-
-		//ioctl
-		.ioctl_download(ioctl_download),
-		.ioctl_index(ioctl_index),
-		.ioctl_wr(ioctl_wr),
-		.ioctl_addr(ioctl_addr),
-		.ioctl_dout(ioctl_data),
-		.ioctl_wait(ioctl_wait)
-	);
-
-
-    wire [15:0] mgmt_din;
-    wire [15:0] mgmt_dout;
-    wire [15:0] mgmt_addr;
-    wire        mgmt_rd;
-    wire        mgmt_wr;
+    // Disk management bus stubbed (softcore lands in M3).
+    wire [15:0] mgmt_din;              // CHIPSET readdata output (unused)
+    wire [15:0] mgmt_dout = 16'd0;     // master write side -> idle
+    wire [15:0] mgmt_addr = 16'd0;
+    wire        mgmt_rd   = 1'b0;
+    wire        mgmt_wr   = 1'b0;
     wire  [7:0] mgmt_req;
     assign mgmt_req[5:3] = 3'b000;
-
-    wire [35:0] EXT_BUS;
-    hps_ext hps_ext  
-	(
-		.clk_sys(clk_chipset),
-		.EXT_BUS(EXT_BUS),
-
-		.ext_din(mgmt_din),
-		.ext_dout(mgmt_dout),
-		.ext_addr(mgmt_addr),
-		.ext_rd(mgmt_rd),
-		.ext_wr(mgmt_wr),
-
-		.ext_req(mgmt_req),
-		.ext_hotswap(2'b00)
-	);
 
     //
     ///////////////////////   CLOCKS   /////////////////////////////
@@ -464,42 +399,46 @@ module emu
 
     localparam [27:0] cur_rate = 28'd50000000;
 
-    pll pll 
-	(
-		.refclk(CLK_50M),
-		.rst(0),
-		.outclk_0(clk_100),
-        .outclk_1(clk_chipset),
-		.locked(pll_locked)
-	);
+    wire clk_sdram_ph;
+    wire clk_pix;
+    wire clk_pix_90;
+    wire pll_video_locked;
 
-    wire pll_system_locked;
-
-    pll_system pll_system_inst (
-        .refclk(CLK_50M),
-        .rst(0),
-        .outclk_0(clk_28_636),
-        .outclk_1(clk_57_272),
-        .outclk_2(clk_114_544),
-        .outclk_3(clk_video_out_ps),
-        .locked(pll_system_locked)
+    // System PLL: 50 MHz (chipset + SDRAM ctrl), 100 MHz (CPU), 50 MHz@ps (dram_clk).
+    pll pll
+    (
+        .refclk   (clk_74a),
+        .rst      (1'b0),
+        .outclk_0 (clk_chipset),
+        .outclk_1 (clk_100),
+        .outclk_2 (clk_sdram_ph),
+        .locked   (pll_locked)
     );
 
-    wire reset_wire = RESET | status[0] | buttons[1] | !pll_locked | !pll_system_locked  | splashscreen | splash_reset_hold | splash_pending;
-    wire video_retime_reset = RESET | status[0] | buttons[1] | !pll_locked | !pll_system_locked | splash_pending;
-    wire reset_sdram_wire = RESET | !pll_locked;
+    // Video PLL: 28.636 MHz (CGA dot clock), 14.318 MHz pixel + 90-deg sibling.
+    pll_video pll_video
+    (
+        .refclk   (clk_74a),
+        .rst      (1'b0),
+        .outclk_0 (clk_28_636),
+        .outclk_1 (clk_pix),
+        .outclk_2 (clk_pix_90),
+        .locked   (pll_video_locked)
+    );
+    // Global power-on reset until both PLLs lock.
+    wire RESET = ~pll_locked | ~pll_video_locked;
+    wire reset_wire = RESET | status[0];
+    wire video_retime_reset = RESET;
+    wire reset_sdram_wire = RESET;
 
     //////////////////////////////////////////////////////////////////
 
-    // TODO: messy, use a single clock domain at least
     always @(posedge clk_28_636)
-    begin
-        HBlank_del <= {HBlank_del[13], HBlank_del[12], HBlank_del[11], HBlank_del[10], HBlank_del[9],
-                       HBlank_del[8], HBlank_del[7], HBlank_del[6], HBlank_del[5], HBlank_del[4],
-                       HBlank_del[3], HBlank_del[2], HBlank_del[1], HBlank_del[0], HBlank};
-        clk_14_318 <= ~clk_14_318;  // 14.318Mhz
-        ce_pixel_cga <= clk_14_318;	//if outside always block appears an overscan column in CGA mode
-    end
+        clk_14_318 <= ~clk_14_318;   // 14.318 MHz toggle for splash / UART timing
+
+    // HGC is disabled; feed CHIPSET's unused HGC dot-clock from the CGA clock so
+    // the kept, unchanged CHIPSET instantiation still has a valid clock there.
+    assign clk_57_272 = clk_28_636;
 
     //////////////////////////////////////////////////////////////////
 
@@ -1167,13 +1106,36 @@ module emu
 		.hsync_width_osd                    (hsync_width_osd)
 	);
 
+    // ---- SDRAM boundary: chipset controller -> Pocket dram_* pins ----
+    // CHIPSET drives these (formerly top-level ports); pass straight through.
+    wire        SDRAM_CLK;
+    wire        SDRAM_CKE;
+    wire [12:0] SDRAM_A;
+    wire  [1:0] SDRAM_BA;
+    wire        SDRAM_DQML;
+    wire        SDRAM_DQMH;
+    wire        SDRAM_nCS;
+    wire        SDRAM_nCAS;
+    wire        SDRAM_nRAS;
+    wire        SDRAM_nWE;
     wire [15:0] SDRAM_DQ_IN;
     wire [15:0] SDRAM_DQ_OUT;
     wire        SDRAM_DQ_IO;
     wire        initilized_sdram;
 
-    assign SDRAM_DQ_IN = SDRAM_DQ;
-    assign SDRAM_DQ = ~SDRAM_DQ_IO ? SDRAM_DQ_OUT : 16'hZZZZ;
+    assign SDRAM_CLK  = clk_chipset;    // controller clock fed into the chipset
+    assign dram_clk   = clk_sdram_ph;   // device clock, phase-shifted 50 MHz
+    assign dram_cke   = SDRAM_CKE;
+    assign dram_a     = SDRAM_A;
+    assign dram_ba    = SDRAM_BA;
+    assign dram_dqm   = {SDRAM_DQMH, SDRAM_DQML};
+    assign dram_ras_n = SDRAM_nRAS;
+    assign dram_cas_n = SDRAM_nCAS;
+    assign dram_we_n  = SDRAM_nWE;
+    // no dram_cs pin on the Pocket; SDRAM_nCS is left unconnected
+
+    assign SDRAM_DQ_IN = dram_dq;
+    assign dram_dq     = ~SDRAM_DQ_IO ? SDRAM_DQ_OUT : 16'hZZZZ;
 
     wire s6_3_mux;
     wire [2:0] SEGMENT;
@@ -1270,28 +1232,27 @@ module emu
         cmp_r <= compr(out_r);
     end
 
-    assign AUDIO_L   = pause_core ? 1'b0 : status[37:36] ? cmp_l : out_l;
-    assign AUDIO_R   = pause_core ? 1'b0 : status[37:36] ? cmp_r : out_r;
-    assign AUDIO_S   = 1;
-    assign AUDIO_MIX = status[39:38];
+    // ---- Audio: 16-bit signed mix -> I2S (Pocket audio codec) ----
+    // (MiSTer AUDIO_MIX stereo-blend dropped; that's M4 audio polish.)
+    wire [15:0] audio_l = pause_core ? 16'd0 : (status[37:36] ? cmp_l : out_l);
+    wire [15:0] audio_r = pause_core ? 16'd0 : (status[37:36] ? cmp_r : out_r);
+
+    sound_i2s #(.CHANNEL_WIDTH(16), .SIGNED_INPUT(1)) sound_i2s (
+        .clk_74a    (clk_74a),
+        .clk_audio  (clk_chipset),
+        .audio_l    (audio_l),
+        .audio_r    (audio_r),
+        .audio_mclk (audio_mclk),
+        .audio_lrck (audio_lrck),
+        .audio_dac  (audio_dac)
+    );
 
     //
     ////////////////////////////  UART  ///////////////////////////////////
     //
-
-    //assign USER_OUT = {1'b1, 1'b1, uart_dtr, 1'b1, uart_rts, uart_tx, 1'b1};
-
-    //
-    // Pin | USB Name |   |Signal
-    // ----+----------+---+-------------
-    // 0   | D+       | I |RX
-    // 1   | D-       | O |TX
-    // 2   | TX-      | O |RTS
-    // 3   | GND_d    | I |CTS
-    // 4   | RX+      | O |DTR
-    // 5   | RX-      | I |DSR
-    // 6   | TX+      | I |DCD
-    //
+    // COM1 lives inside CHIPSET; its clock enable is generated here (kept verbatim).
+    // The external MiSTer serial wiring (UART pins, USER-port COM2) is dropped and
+    // the UART inputs are tied to the idle/marking level.
 
     logic clk_uart_ff_1;
     logic clk_uart_ff_2;
@@ -1330,580 +1291,58 @@ module emu
         end
     end
 
-    wire uart_tx, uart_rts, uart_dtr;
-
-    assign UART_TXD = uart_tx;
-    assign UART_RTS = uart_rts;
-    assign UART_DTR = uart_dtr;
-
-    wire uart_rx  = UART_RXD;
-    wire uart_cts = UART_CTS;
-    wire uart_dsr = UART_DSR;
-    wire uart_dcd = UART_DTR;
-
-
-    /// UART2
-
-    assign USER_OUT = {1'b1, 1'b1, uart2_dtr, 1'b1, uart2_rts, uart2_tx, 1'b1};
-
-    //
-    // Pin | USB Name |   |Signal
-    // ----+----------+---+-------------
-    // 0   | D+       | I |RX
-    // 1   | D-       | O |TX
-    // 2   | TX-      | O |RTS
-    // 3   | GND_d    | I |CTS
-    // 4   | RX+      | O |DTR
-    // 5   | RX-      | I |DSR
-    // 6   | TX+      | I |DCD
-    //
-
-    wire uart2_tx, uart2_rts, uart2_dtr;
-
-    wire uart2_rx  = USER_IN[0];
-    wire uart2_cts = USER_IN[3];
-    wire uart2_dsr = USER_IN[5];
-    wire uart2_dcd = USER_IN[6];
+    wire uart_tx, uart_rts, uart_dtr;   // CHIPSET COM1 outputs, no external pins
+    wire uart_rx  = 1'b1;
+    wire uart_cts = 1'b1;
+    wire uart_dsr = 1'b1;
+    wire uart_dcd = 1'b1;
 
     //
     ///////////////////////   MMC     ///////////////////////
     //
-    logic [1:0]  use_mmc;
-    logic spi_clk;
-    logic spi_cs;
-    logic spi_mosi;
-    logic spi_miso;
-
-    always @(posedge clk_chipset)
-        if (reset)
-            use_mmc <= status[22:21];
-        else
-            use_mmc <= use_mmc;
-
-    assign  SD_SCK      = spi_clk;
-    assign  SD_MOSI     = spi_mosi;
-    assign  spi_miso    = SD_MISO;
-    assign  SD_CS       = spi_cs;
+    // SPI/MMC storage path unused (M5 uses the managed-SD ide.v backend).
+    wire [1:0] use_mmc = 2'b00;
+    wire spi_clk, spi_cs, spi_mosi;     // CHIPSET outputs, no external pins
+    wire spi_miso = 1'b0;
 
     //
     ///////////////////////   VIDEO   ///////////////////////
     //
+    // Lean CGA -> Pocket scaler. The MiSTer output chain (monochrome filter,
+    // video_mixer / scandoubler / HQ2x / gamma, the HGC path, jtframe_credits and
+    // the HDMI clock retime) is dropped; the Pocket scaler does scaling/filtering.
+    // Correct DE/porches and display modes are the M2 video spike.
+    //
+    // r/g/b/HSync/VSync/HBlank/VBlank leave CHIPSET on the clk_28_636 dot-clock
+    // domain. clk_pix (14.318 MHz) is 28.636/2 off the same PLL, so it is phase-
+    // aligned and samples them cleanly, one pixel per edge.
 
-    wire HBlank;
-    wire HSync;
-    wire VBlank;
-    wire VSync;
-    reg  ce_pixel_cga = 1'b0;
-    wire ce_pixel_hgc_raw;
-    wire de_o;
-    wire [5:0] r, g, b;
-    reg [7:0] raux_cga, gaux_cga, baux_cga;
-    reg [7:0] raux_hgc, gaux_hgc, baux_hgc;
-	 wire [7:0] VGA_R_AUX, VGA_G_AUX, VGA_B_AUX;
-    wire CLK_VIDEO_HGC;
-    wire CLK_VIDEO_CGA;
-    wire CE_PIXEL_CREDITS;
+    wire        HBlank;
+    wire        HSync;
+    wire        VBlank;
+    wire        VSync;
+    wire [5:0]  r, g, b;
+    wire        tandy_16_gfx, tandy_color_16;   // CHIPSET Tandy-video outputs (unused)
 
-    wire  [7:0] VGA_R_cga;
-    wire  [7:0] VGA_G_cga;
-    wire  [7:0] VGA_B_cga;
-    wire        VGA_HS_cga;
-    wire        VGA_VS_cga;
-    wire        VGA_DE_cga;
-    wire [21:0] gamma_bus_cga;
-    wire        CE_PIXEL_cga;
-    reg         ce_pixel_cga_2x = 1'b0;
-    wire        ce_pixel_cga_vid = cga_scandouble_en ? ce_pixel_cga_2x : ce_pixel_cga;
+    reg  [23:0] vid_rgb = 24'd0;
+    reg         vid_de  = 1'b0;
+    reg         vid_hs  = 1'b0;
+    reg         vid_vs  = 1'b0;
 
-    wire  [7:0] VGA_R_hgc;
-    wire  [7:0] VGA_G_hgc;
-    wire  [7:0] VGA_B_hgc;
-    wire        VGA_HS_hgc;
-    wire        VGA_VS_hgc;
-    wire        VGA_DE_hgc;
-    wire [21:0] gamma_bus_hgc;
-    wire        CE_PIXEL_hgc;
-    reg  [1:0]  ce_pixel_hgc_div = 2'b0;
-    reg  [5:0]  hgc_r_meta, hgc_g_meta, hgc_b_meta;
-    reg  [5:0]  hgc_r_sync, hgc_g_sync, hgc_b_sync;
-    reg         hgc_hs_meta, hgc_vs_meta;
-    reg         hgc_hs_sync, hgc_vs_sync;
-    reg         hgc_hb_meta, hgc_vb_meta;
-    reg         hgc_hb_sync, hgc_vb_sync;
-
-    reg  [7:0]  VGA_R_cga_src = 8'd0;
-    reg  [7:0]  VGA_G_cga_src = 8'd0;
-    reg  [7:0]  VGA_B_cga_src = 8'd0;
-    reg         VGA_HS_cga_src = 1'b0;
-    reg         VGA_VS_cga_src = 1'b0;
-    reg         VGA_DE_cga_src = 1'b0;
-    reg         LHBL_cga_src = 1'b1;
-    reg         LVBL_cga_src = 1'b1;
-    reg         CE_PIXEL_cga_src = 1'b0;
-    reg  [7:0]  VGA_R_cga_ps = 8'd0;
-    reg  [7:0]  VGA_G_cga_ps = 8'd0;
-    reg  [7:0]  VGA_B_cga_ps = 8'd0;
-    reg         VGA_HS_cga_ps = 1'b0;
-    reg         VGA_VS_cga_ps = 1'b0;
-    reg         VGA_DE_cga_ps = 1'b0;
-    reg         LHBL_cga_ps = 1'b1;
-    reg         LVBL_cga_ps = 1'b1;
-    reg         CE_PIXEL_cga_ps = 1'b0;
-    reg         CE_PIXEL_cga_ps_d = 1'b0;
-    reg  [7:0]  VGA_R_cga_hdmi, VGA_G_cga_hdmi, VGA_B_cga_hdmi;
-    reg         VGA_HS_cga_hdmi, VGA_VS_cga_hdmi, VGA_DE_cga_hdmi;
-    reg         LHBL_cga_hdmi, LVBL_cga_hdmi;
-    reg         CE_PIXEL_cga_hdmi = 1'b0;
-
-    reg  [7:0]  VGA_R_hgc_src = 8'd0;
-    reg  [7:0]  VGA_G_hgc_src = 8'd0;
-    reg  [7:0]  VGA_B_hgc_src = 8'd0;
-    reg         VGA_HS_hgc_src = 1'b0;
-    reg         VGA_VS_hgc_src = 1'b0;
-    reg         VGA_DE_hgc_src = 1'b0;
-    reg         LHBL_hgc_src = 1'b1;
-    reg         credits_vb_hgc_src = 1'b1;
-    reg         CE_PIXEL_hgc_src = 1'b0;
-    reg  [7:0]  VGA_R_hgc_ps = 8'd0;
-    reg  [7:0]  VGA_G_hgc_ps = 8'd0;
-    reg  [7:0]  VGA_B_hgc_ps = 8'd0;
-    reg         VGA_HS_hgc_ps = 1'b0;
-    reg         VGA_VS_hgc_ps = 1'b0;
-    reg         VGA_DE_hgc_ps = 1'b0;
-    reg         LHBL_hgc_ps = 1'b1;
-    reg         credits_vb_hgc_ps = 1'b1;
-    reg         CE_PIXEL_hgc_ps = 1'b0;
-    reg         ce_pixel_hgc_prev = 1'b0;
-    reg         ce_pixel_hgc_tog = 1'b0;
-    reg         ce_pixel_hgc_tog_1 = 1'b0;
-    reg         ce_pixel_hgc_tog_2 = 1'b0;
-    wire        CE_PIXEL_hgc_sync;
-    reg  [7:0]  VGA_R_hgc_56 = 8'd0, VGA_G_hgc_56 = 8'd0, VGA_B_hgc_56 = 8'd0;
-    reg         VGA_HS_hgc_56 = 1'b0, VGA_VS_hgc_56 = 1'b0, VGA_DE_hgc_56 = 1'b0;
-    reg         LHBL_hgc_56 = 1'b1, credits_vb_hgc_56 = 1'b1;
-    reg         CE_PIXEL_hgc_hdmi = 1'b0;
-
-    assign CLK_VIDEO = clk_video_out_ps;
-    assign CLK_VIDEO_HGC = clk_114_544;
-    assign CLK_VIDEO_CGA = clk_57_272;
-    assign ce_pixel_hgc_raw = ce_pixel_hgc_div[1];
-
-    always @(posedge clk_114_544)
-        if (`ENABLE_HGC)
-            ce_pixel_hgc_div <= ce_pixel_hgc_div + 2'd1;
-        else
-            ce_pixel_hgc_div <= 2'd0;
-
-    always @(posedge clk_57_272)
-        ce_pixel_cga_2x <= ~ce_pixel_cga_2x;
-
-    assign VGA_SL = {scale_video_ff==3, scale_video_ff==2};
-
-    wire   scandoubler = video_scandoubler_en;
-
-    reg [14:0] HBlank_del;
-    reg [24:0] HBlank_del_hgc;
-    wire tandy_16_gfx;
-    wire tandy_color_16;
-    wire color = (screen_mode_video_ff == 3'd0);
-    
-	 wire HBlank_VGA;
-
-    reg [10:0] HBlank_counter = 0;
-    reg [10:0] HBlank_counter_hgc = 0;
-    reg HBlank_fixed = 1'b1;
-    reg HBlank_fixed_hgc = 1'b1;
-    reg [1:0] HSync_del = 1'b11;
-    reg [1:0] HSync_del_hgc = 1'b11;
-    localparam integer MDA_VSYNC_DELAY = 19;
-    reg [MDA_VSYNC_DELAY:0] VSync_line;
-    reg        video_pause_core_buf;
-    reg        video_pause_core;
-
-    always_comb
+    always @(posedge clk_pix)
     begin
-        if (swap_video_eff)
-            HBlank_VGA = HBlank_del_hgc[24];
-        else if (tandy_color_16)
-            HBlank_VGA = HBlank_del[11];
-        else if (tandy_16_gfx)
-            HBlank_VGA = HBlank_del[9];
-        else
-            HBlank_VGA = HBlank_del[5];
+        vid_de  <= ~(HBlank | VBlank);
+        vid_rgb <= ~(HBlank | VBlank) ? {r, 2'b00, g, 2'b00, b, 2'b00} : 24'd0;
+        vid_hs  <= HSync;
+        vid_vs  <= VSync;
     end
 
-    always @ (posedge ce_pixel_cga)
-    begin
-
-        HSync_del <= {HSync_del[0], HSync};
-
-        if (HSync_del == 2'b01)
-        begin
-            HBlank_counter <= 0;
-            HBlank_fixed <= 1'b1;
-        end
-        else
-        begin
-            if (HBlank_counter == (std_hsyncwidth ? 120 : 143))
-                HBlank_fixed <= 1'b0;
-            else
-                HBlank_counter <= HBlank_counter + 1;
-        end
-    end
-
-    always @(posedge clk_57_272)
-    begin
-        if (swap_video_eff)
-        begin
-            HBlank_del_hgc <= {HBlank_del_hgc[23:0], HBlank};
-            HSync_del_hgc <= {HSync_del_hgc[0], HSync};
-            if (HSync_del_hgc == 2'b01)
-            begin
-                VSync_line <= {VSync_line[MDA_VSYNC_DELAY-1:0], VSync};
-                HBlank_counter_hgc <= 0;
-                HBlank_fixed_hgc <= 1'b1;
-            end
-            else
-            begin
-                if (HBlank_counter_hgc == (std_hsyncwidth ? 120 : 143))
-                    HBlank_fixed_hgc <= 1'b0;
-                else
-                    HBlank_counter_hgc <= HBlank_counter_hgc + 1;
-            end
-        end
-    end
-
-    always @ (posedge clk_video_out_ps) begin
-        video_pause_core_buf    <= pause_core;
-        video_pause_core        <= video_pause_core_buf;
-    end
-
-    video_monochrome_converter video_mono_cga 
-	(
-		.clk_vid(CLK_VIDEO_CGA),
-		.ce_pix(ce_pixel_cga_vid),
-
-		.R({r, 2'b00}),
-		.G({g, 2'b00}),
-		.B({b, 2'b00}),
-
-		.gfx_mode(screen_mode_video_ff),
-
-		.R_OUT(raux_cga),
-		.G_OUT(gaux_cga),
-		.B_OUT(baux_cga)
-	);
-
-    video_monochrome_converter video_mono_hgc
-	(
-		.clk_vid(CLK_VIDEO_HGC),
-		.ce_pix(ce_pixel_hgc_raw),
-
-		.R({hgc_r_sync, 2'b00}),
-		.G({hgc_g_sync, 2'b00}),
-		.B({hgc_b_sync, 2'b00}),
-
-		.gfx_mode(screen_mode_video_ff),
-
-		.R_OUT(raux_hgc),
-		.G_OUT(gaux_hgc),
-		.B_OUT(baux_hgc)
-	);
-
-    /*
-    assign VGA_R = raux;
-    assign VGA_G = gaux;
-    assign VGA_B = baux;
-    assign VGA_HS = HSync;
-    assign VGA_VS = VSync;
-    assign VGA_DE = ~(HBlank | VBlank);
-    assign CE_PIXEL = ce_pixel;
-    */
-
-    wire LHBL = cga_scandouble_en ? HBlank :
-                ((border_video_ff) ? (swap_video_eff ? HBlank_fixed_hgc : HBlank_fixed) : HBlank_VGA);
-    wire LVBL = cga_scandouble_en ? VBlank :
-                ((border_video_ff) ? (std_hsyncwidth ? VGA_VBlank_border : VBlank) : VBlank);
-    wire VSync_hgc = VSync_line[MDA_VSYNC_DELAY];
-
-    wire       pre2x_LHBL, pre2x_LVBL;
-    wire [7:0] pre2x_r, pre2x_g, pre2x_b;
-	 
-
-	video_mixer #(.GAMMA(1)) video_mixer_cga
-	(
-		.*,
-
-		.CLK_VIDEO(CLK_VIDEO_CGA),
-		.CE_PIXEL(CE_PIXEL_cga),
-		.ce_pix(ce_pixel_cga_vid),
-
-		.freeze_sync(),
-
-		.R(raux_cga),
-		.G(gaux_cga),
-		.B(baux_cga),
-
-		.HBlank(LHBL),
-		.VBlank(LVBL),
-		.HSync(HSync),
-		.VSync(VSync),
-
-		.scandoubler(1'b0),
-		.hq2x(scale_video_ff==1),
-		.gamma_bus(gamma_bus_cga),
-
-		.VGA_R(VGA_R_cga),
-		.VGA_G(VGA_G_cga),
-		.VGA_B(VGA_B_cga),
-		.VGA_VS(VGA_VS_cga),
-		.VGA_HS(VGA_HS_cga),
-		.VGA_DE(VGA_DE_cga)
-
-	);
-
-    always @(posedge clk_57_272)
-    begin
-        VGA_R_cga_src <= VGA_R_cga;
-        VGA_G_cga_src <= VGA_G_cga;
-        VGA_B_cga_src <= VGA_B_cga;
-        VGA_HS_cga_src <= VGA_HS_cga;
-        VGA_VS_cga_src <= VGA_VS_cga;
-        VGA_DE_cga_src <= VGA_DE_cga;
-        LHBL_cga_src <= LHBL;
-        LVBL_cga_src <= LVBL;
-        CE_PIXEL_cga_src <= CE_PIXEL_cga;
-    end
-
-    // Retimes the exact-frequency CGA output onto a phase-shifted sibling clock.
-    always @(posedge clk_video_out_ps or posedge video_retime_reset)
-    begin
-        if (video_retime_reset)
-        begin
-            VGA_R_cga_ps <= 8'd0;
-            VGA_G_cga_ps <= 8'd0;
-            VGA_B_cga_ps <= 8'd0;
-            VGA_HS_cga_ps <= 1'b0;
-            VGA_VS_cga_ps <= 1'b0;
-            VGA_DE_cga_ps <= 1'b0;
-            LHBL_cga_ps <= 1'b1;
-            LVBL_cga_ps <= 1'b1;
-            CE_PIXEL_cga_ps <= 1'b0;
-            CE_PIXEL_cga_ps_d <= 1'b0;
-            VGA_R_cga_hdmi <= 8'd0;
-            VGA_G_cga_hdmi <= 8'd0;
-            VGA_B_cga_hdmi <= 8'd0;
-            VGA_HS_cga_hdmi <= 1'b0;
-            VGA_VS_cga_hdmi <= 1'b0;
-            VGA_DE_cga_hdmi <= 1'b0;
-            LHBL_cga_hdmi <= 1'b1;
-            LVBL_cga_hdmi <= 1'b1;
-            CE_PIXEL_cga_hdmi <= 1'b0;
-        end
-        else
-        begin
-            CE_PIXEL_cga_hdmi <= CE_PIXEL_cga_ps & ~CE_PIXEL_cga_ps_d;
-            if (CE_PIXEL_cga_ps & ~CE_PIXEL_cga_ps_d)
-            begin
-                VGA_R_cga_hdmi <= VGA_R_cga_ps;
-                VGA_G_cga_hdmi <= VGA_G_cga_ps;
-                VGA_B_cga_hdmi <= VGA_B_cga_ps;
-                VGA_HS_cga_hdmi <= VGA_HS_cga_ps;
-                VGA_VS_cga_hdmi <= VGA_VS_cga_ps;
-                VGA_DE_cga_hdmi <= VGA_DE_cga_ps;
-                LHBL_cga_hdmi <= LHBL_cga_ps;
-                LVBL_cga_hdmi <= LVBL_cga_ps;
-            end
-
-            CE_PIXEL_cga_ps_d <= CE_PIXEL_cga_ps;
-            CE_PIXEL_cga_ps <= CE_PIXEL_cga_src;
-            VGA_R_cga_ps <= VGA_R_cga_src;
-            VGA_G_cga_ps <= VGA_G_cga_src;
-            VGA_B_cga_ps <= VGA_B_cga_src;
-            VGA_HS_cga_ps <= VGA_HS_cga_src;
-            VGA_VS_cga_ps <= VGA_VS_cga_src;
-            VGA_DE_cga_ps <= VGA_DE_cga_src;
-            LHBL_cga_ps <= LHBL_cga_src;
-            LVBL_cga_ps <= LVBL_cga_src;
-        end
-    end
-
-    always @(posedge clk_114_544)
-    begin
-        if (ce_pixel_hgc_raw)
-        begin
-            hgc_r_meta  <= r;
-            hgc_g_meta  <= g;
-            hgc_b_meta  <= b;
-            hgc_hs_meta <= HSync;
-            hgc_vs_meta <= VSync_hgc;
-            hgc_hb_meta <= HBlank;
-            hgc_vb_meta <= VBlank;
-
-            hgc_r_sync  <= hgc_r_meta;
-            hgc_g_sync  <= hgc_g_meta;
-            hgc_b_sync  <= hgc_b_meta;
-            hgc_hs_sync <= hgc_hs_meta;
-            hgc_vs_sync <= hgc_vs_meta;
-            hgc_hb_sync <= hgc_hb_meta;
-            hgc_vb_sync <= hgc_vb_meta;
-        end
-    end
-
-    video_mixer #(.GAMMA(0)) video_mixer_hgc
-	(
-		.*,
-
-		.CLK_VIDEO(CLK_VIDEO_HGC),
-		.CE_PIXEL(CE_PIXEL_hgc),
-		.ce_pix(ce_pixel_hgc_raw),
-
-		.freeze_sync(),
-
-		.R(raux_hgc),
-		.G(gaux_hgc),
-		.B(baux_hgc),
-
-		.HBlank(hgc_hb_sync),
-		.VBlank(hgc_vb_sync),
-		.HSync(hgc_hs_sync),
-		.VSync(hgc_vs_sync),
-
-		.scandoubler(scandoubler),
-		.hq2x(scale_video_ff==1),
-		.gamma_bus(gamma_bus_hgc),
-
-		.VGA_R(VGA_R_hgc),
-		.VGA_G(VGA_G_hgc),
-		.VGA_B(VGA_B_hgc),
-		.VGA_VS(VGA_VS_hgc),
-		.VGA_HS(VGA_HS_hgc),
-		.VGA_DE(VGA_DE_hgc)
-
-	);
-
-    always @(posedge clk_114_544)
-    begin
-        ce_pixel_hgc_prev <= CE_PIXEL_hgc;
-        if (CE_PIXEL_hgc && ~ce_pixel_hgc_prev)
-            ce_pixel_hgc_tog <= ~ce_pixel_hgc_tog;
-    end
-
-    always @(posedge clk_57_272)
-    begin
-        ce_pixel_hgc_tog_1 <= ce_pixel_hgc_tog;
-        ce_pixel_hgc_tog_2 <= ce_pixel_hgc_tog_1;
-        CE_PIXEL_hgc_src <= CE_PIXEL_hgc_sync;
-
-        if (CE_PIXEL_hgc_sync)
-        begin
-            VGA_R_hgc_src <= VGA_R_hgc;
-            VGA_G_hgc_src <= VGA_G_hgc;
-            VGA_B_hgc_src <= VGA_B_hgc;
-            VGA_HS_hgc_src <= VGA_HS_hgc;
-            VGA_VS_hgc_src <= VGA_VS_hgc;
-            VGA_DE_hgc_src <= VGA_DE_hgc;
-            LHBL_hgc_src <= hgc_hb_sync;
-            credits_vb_hgc_src <= hgc_vb_sync;
-        end
-    end
-
-    assign CE_PIXEL_hgc_sync = ce_pixel_hgc_tog_1 ^ ce_pixel_hgc_tog_2;
-
-    // Retimes the HGC mixer output by exploiting the exact 2:1 relation between
-    // clk_114_544 and the phase-shifted clk_video_out_ps.
-    always @(posedge clk_video_out_ps or posedge video_retime_reset)
-    begin
-        if (video_retime_reset)
-        begin
-            VGA_R_hgc_ps <= 8'd0;
-            VGA_G_hgc_ps <= 8'd0;
-            VGA_B_hgc_ps <= 8'd0;
-            VGA_HS_hgc_ps <= 1'b0;
-            VGA_VS_hgc_ps <= 1'b0;
-            VGA_DE_hgc_ps <= 1'b0;
-            LHBL_hgc_ps <= 1'b1;
-            credits_vb_hgc_ps <= 1'b1;
-            CE_PIXEL_hgc_ps <= 1'b0;
-            VGA_R_hgc_56 <= 8'd0;
-            VGA_G_hgc_56 <= 8'd0;
-            VGA_B_hgc_56 <= 8'd0;
-            VGA_HS_hgc_56 <= 1'b0;
-            VGA_VS_hgc_56 <= 1'b0;
-            VGA_DE_hgc_56 <= 1'b0;
-            LHBL_hgc_56 <= 1'b1;
-            credits_vb_hgc_56 <= 1'b1;
-            CE_PIXEL_hgc_hdmi <= 1'b0;
-        end
-        else
-        begin
-            CE_PIXEL_hgc_hdmi <= CE_PIXEL_hgc_ps;
-            if (CE_PIXEL_hgc_ps)
-            begin
-                VGA_R_hgc_56 <= VGA_R_hgc_ps;
-                VGA_G_hgc_56 <= VGA_G_hgc_ps;
-                VGA_B_hgc_56 <= VGA_B_hgc_ps;
-                VGA_HS_hgc_56 <= VGA_HS_hgc_ps;
-                VGA_VS_hgc_56 <= VGA_VS_hgc_ps;
-                VGA_DE_hgc_56 <= VGA_DE_hgc_ps;
-                LHBL_hgc_56 <= LHBL_hgc_ps;
-                credits_vb_hgc_56 <= credits_vb_hgc_ps;
-            end
-
-            CE_PIXEL_hgc_ps <= CE_PIXEL_hgc_src;
-            VGA_R_hgc_ps <= VGA_R_hgc_src;
-            VGA_G_hgc_ps <= VGA_G_hgc_src;
-            VGA_B_hgc_ps <= VGA_B_hgc_src;
-            VGA_HS_hgc_ps <= VGA_HS_hgc_src;
-            VGA_VS_hgc_ps <= VGA_VS_hgc_src;
-            VGA_DE_hgc_ps <= VGA_DE_hgc_src;
-            LHBL_hgc_ps <= LHBL_hgc_src;
-            credits_vb_hgc_ps <= credits_vb_hgc_src;
-        end
-    end
-
-    assign VGA_R_AUX  =  swap_video_eff ? VGA_R_hgc_56   : VGA_R_cga_hdmi;
-    assign VGA_G_AUX  =  swap_video_eff ? VGA_G_hgc_56   : VGA_G_cga_hdmi;
-    assign VGA_B_AUX  =  swap_video_eff ? VGA_B_hgc_56   : VGA_B_cga_hdmi;
-    assign VGA_HS =  swap_video_eff ? VGA_HS_hgc_56 : VGA_HS_cga_hdmi;
-    assign VGA_VS =  swap_video_eff ? VGA_VS_hgc_56 : VGA_VS_cga_hdmi;
-    assign VGA_DE =  swap_video_eff ? VGA_DE_hgc_56 : VGA_DE_cga_hdmi;
-    assign gamma_bus =  swap_video_eff ? gamma_bus_hgc : gamma_bus_cga;
-    assign CE_PIXEL  =  swap_video_eff ? CE_PIXEL_hgc_hdmi : CE_PIXEL_cga_hdmi;
-    assign CE_PIXEL_CREDITS = swap_video_eff ? CE_PIXEL_hgc_hdmi : CE_PIXEL_cga_hdmi;
-    wire credits_hb = swap_video_eff ? LHBL_hgc_56 : LHBL_cga_hdmi;
-    wire credits_vb = swap_video_eff ? credits_vb_hgc_56 : LVBL_cga_hdmi;
-    wire credits_border = swap_video_eff ? 1'b0 : border_video_ff;
-    jtframe_credits #(
-        .PAGES  (4),
-        .COLW   (8),
-        .BLKPOL (1)
-    ) u_credits(
-        .rst        ( reset      ),
-        .clk        ( clk_video_out_ps ),
-        .pxl_cen    ( CE_PIXEL_CREDITS ),
-
-        // input image
-        .HB         ( credits_hb  ),
-        .VB         ( credits_vb ),
-        .rgb_in     ( { VGA_R_AUX, VGA_G_AUX, VGA_B_AUX } ),
-        .rotate     ( 2'd0  ),
-        .toggle     ( 1'b0  ),
-        .fast_scroll( 1'b0  ),
-        .border     ( credits_border ),
-
-        .vram_din   ( 8'h0  ),
-        .vram_dout  (       ),
-        .vram_addr  ( 8'h0  ),
-        .vram_we    ( 1'b0  ),
-        .vram_ctrl  ( 3'b0  ),
-        .enable     ( video_pause_core ),
-
-        // output image
-        .HB_out     ( pre2x_LHBL      ),
-        .VB_out     ( pre2x_LVBL      ),
-        .rgb_out    ( {VGA_R, VGA_G, VGA_B } )
-    );
-
+    assign video_rgb          = vid_rgb;
+    assign video_de           = vid_de;
+    assign video_hs           = vid_hs;
+    assign video_vs           = vid_vs;
+    assign video_skip         = 1'b0;
+    assign video_rgb_clock    = clk_pix;
+    assign video_rgb_clock_90 = clk_pix_90;
 
 endmodule
