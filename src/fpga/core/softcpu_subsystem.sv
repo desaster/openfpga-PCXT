@@ -24,6 +24,9 @@ module softcpu_subsystem (
     // floppy.v request flags (CHIPSET fdd_request): {write-pending, read-pending}
     input [1:0] fdd_request,
 
+    // Mounted drive-A image size in sectors (from the host dataslot table)
+    input [31:0] fdd_disk_size,
+
     // Management-bus master to floppy.v via CHIPSET
     output [15:0] mgmt_addr,
     output [15:0] mgmt_dout,
@@ -203,6 +206,7 @@ module softcpu_subsystem (
         .cpu_rdata  (fdd_rdata),
 
         .fdd_request(fdd_request),
+        .disk_size  (fdd_disk_size),
 
         .mgmt_addr  (mgmt_addr),
         .mgmt_dout  (mgmt_dout),

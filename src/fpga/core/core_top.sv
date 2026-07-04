@@ -372,13 +372,13 @@ module core_top (
     // ROM load: data_loader + FIFO + copier drive ioctl_* in the ROM-LOAD
     // section below; the reused BIOS FSM consumes them.
 
-    // Disk management bus stubbed (no disk softcore yet).
-    wire [15:0] mgmt_din;              // CHIPSET readdata output (unused)
-    wire [15:0] mgmt_dout = 16'd0;     // master write side -> idle
-    wire [15:0] mgmt_addr = 16'd0;
-    wire        mgmt_rd   = 1'b0;
-    wire        mgmt_wr   = 1'b0;
-    wire  [7:0] mgmt_req;
+    // Disk management bus, mastered by the disk softcore (u_softcpu, below).
+    wire [15:0] mgmt_din;              // CHIPSET readdata -> softcore
+    wire [15:0] mgmt_dout;             // softcore -> CHIPSET write data
+    wire [15:0] mgmt_addr;             // softcore -> CHIPSET address
+    wire        mgmt_rd;               // softcore -> CHIPSET read strobe
+    wire        mgmt_wr;               // softcore -> CHIPSET write strobe
+    wire  [7:0] mgmt_req;              // [7:6] fdd request, [2:0] ide0 (from CHIPSET)
     assign mgmt_req[5:3] = 3'b000;
 
     //
@@ -472,13 +472,18 @@ module core_top (
     wire        dataslot_allcomplete;
     wire        osnotify_inmenu;
 
-    // Target-dataslot (core-initiated host access) + data table: unused, tied off.
-    wire        target_dataslot_read       = 1'b0;
-    wire        target_dataslot_write      = 1'b0;
-    wire [15:0] target_dataslot_id         = 16'd0;
-    wire [31:0] target_dataslot_slotoffset = 32'd0;
-    wire [31:0] target_dataslot_bridgeaddr = 32'd0;
-    wire [31:0] target_dataslot_length     = 32'd0;
+    // Target-dataslot: the disk softcore initiates host reads of floppy images.
+    wire        target_dataslot_read;
+    wire        target_dataslot_write;
+    wire [15:0] target_dataslot_id;
+    wire [31:0] target_dataslot_slotoffset;
+    wire [31:0] target_dataslot_bridgeaddr;
+    wire [31:0] target_dataslot_length;
+    wire        target_dataslot_ack;
+    wire        target_dataslot_done;
+    wire  [2:0] target_dataslot_err;
+
+    // Data table: unused, tied off.
     wire [9:0]  datatable_addr             = 10'd0;
     wire        datatable_wren             = 1'b0;
     wire [31:0] datatable_data             = 32'd0;
@@ -540,9 +545,9 @@ module core_top (
 
         .target_dataslot_read      (target_dataslot_read),
         .target_dataslot_write     (target_dataslot_write),
-        .target_dataslot_ack       (),
-        .target_dataslot_done      (),
-        .target_dataslot_err       (),
+        .target_dataslot_ack       (target_dataslot_ack),
+        .target_dataslot_done      (target_dataslot_done),
+        .target_dataslot_err       (target_dataslot_err),
         .target_dataslot_id        (target_dataslot_id),
         .target_dataslot_slotoffset(target_dataslot_slotoffset),
         .target_dataslot_bridgeaddr(target_dataslot_bridgeaddr),
@@ -552,6 +557,56 @@ module core_top (
         .datatable_wren            (datatable_wren),
         .datatable_data            (datatable_data),
         .datatable_q               ()
+    );
+
+    // ---- Disk softcore ----
+    // Services CHIPSET's floppy.v: pulls sectors from the drive-A dataslot with
+    // core_bridge_cmd's target_dataslot handshake and streams them over the
+    // management bus. The image size is reported once as a dataslot update (bytes);
+    // convert to sectors on the chipset clock and hand it to the firmware.
+    reg [31:0] fdd_slot_bytes_74a = 32'd0;
+    always @(posedge clk_74a) begin
+        if (dataslot_update && dataslot_update_id == 16'd1)
+            fdd_slot_bytes_74a <= dataslot_update_size;
+    end
+
+    wire [31:0] fdd_slot_bytes;
+    synch_3 #(.WIDTH(32)) s_fdd_size (
+        .i   (fdd_slot_bytes_74a),
+        .o   (fdd_slot_bytes),
+        .clk (clk_chipset)
+    );
+    wire [31:0] fdd_disk_sectors = fdd_slot_bytes >> 9;   // bytes / 512
+
+    softcpu_subsystem u_softcpu (
+        .clk_sys                    (clk_chipset),
+        .clk_74a                    (clk_74a),
+        .reset                      (reset),
+
+        .fdd_request                (mgmt_req[7:6]),
+        .fdd_disk_size              (fdd_disk_sectors),
+
+        .mgmt_addr                  (mgmt_addr),
+        .mgmt_dout                  (mgmt_dout),
+        .mgmt_wr                    (mgmt_wr),
+        .mgmt_rd                    (mgmt_rd),
+        .mgmt_din                   (mgmt_din),
+
+        .bridge_wr                  (bridge_wr),
+        .bridge_addr                (bridge_addr),
+        .bridge_wr_data             (bridge_wr_data),
+
+        .target_dataslot_read       (target_dataslot_read),
+        .target_dataslot_write      (target_dataslot_write),
+        .target_dataslot_id         (target_dataslot_id),
+        .target_dataslot_slotoffset (target_dataslot_slotoffset),
+        .target_dataslot_bridgeaddr (target_dataslot_bridgeaddr),
+        .target_dataslot_length     (target_dataslot_length),
+        .target_dataslot_ack        (target_dataslot_ack),
+        .target_dataslot_done       (target_dataslot_done),
+        .target_dataslot_err        (target_dataslot_err),
+
+        .bridge_rd_data_out         ()
     );
 
     // ---- ROM-load download tracking ----
