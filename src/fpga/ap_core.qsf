@@ -773,6 +773,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE core/pocket_keyboard.sv
 set_global_assignment -name VERILOG_FILE core/picorv32.v
 set_global_assignment -name VERILOG_FILE core/sprom.v
 set_global_assignment -name SYSTEMVERILOG_FILE core/softcpu_subsystem.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/softcpu_fdd_bridge.sv
 # core_constraints.sdc is pulled in by apf_constraints.sdc via read_sdc
 # (after derive_pll_clocks); do not add it as an SDC_FILE here too.
 

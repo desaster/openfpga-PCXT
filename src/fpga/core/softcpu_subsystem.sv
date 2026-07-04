@@ -2,10 +2,10 @@
 // PicoRV32 disk-service softcore subsystem.
 //
 // A small RISC-V computer that services the floppy controller. It runs firmware
-// from an on-chip ROM, with work RAM for its stack and buffers. The disk data
-// mover (which pulls sectors from an APF dataslot and streams them into
-// floppy.v's mgmt FIFO) and its memory-mapped I/O registers are added in the
-// disk-bridge slice; this slice stands up the computer itself.
+// from an on-chip ROM, with work RAM for its stack and buffers, and reaches the
+// disk bridge (softcpu_fdd_bridge) through memory-mapped registers at 0x3xxxxxxx.
+// The bridge pulls sectors from an APF dataslot and streams them into floppy.v's
+// mgmt FIFO.
 //
 // The CPU runs on clk_pico, a clock derived from clk_sys by gating it down to a
 // single-cycle pulse every six cycles (about 8.3 MHz). Every clk_pico edge is
@@ -18,7 +18,36 @@
 
 module softcpu_subsystem (
     input clk_sys,   // clk_chipset, 50 MHz
-    input reset
+    input clk_74a,   // APF bridge clock
+    input reset,
+
+    // floppy.v request flags (CHIPSET fdd_request): {write-pending, read-pending}
+    input [1:0] fdd_request,
+
+    // Management-bus master to floppy.v via CHIPSET
+    output [15:0] mgmt_addr,
+    output [15:0] mgmt_dout,
+    output        mgmt_wr,
+    output        mgmt_rd,
+    input  [15:0] mgmt_din,
+
+    // APF host DMA into the disk bridge RAM
+    input         bridge_wr,
+    input  [31:0] bridge_addr,
+    input  [31:0] bridge_wr_data,
+
+    // APF target-dataslot transfer handshake
+    output        target_dataslot_read,
+    output        target_dataslot_write,
+    output [15:0] target_dataslot_id,
+    output [31:0] target_dataslot_slotoffset,
+    output [31:0] target_dataslot_bridgeaddr,
+    output [31:0] target_dataslot_length,
+    input         target_dataslot_ack,
+    input         target_dataslot_done,
+    input   [2:0] target_dataslot_err,
+
+    output [31:0] bridge_rd_data_out
 );
 
     //
@@ -64,11 +93,12 @@ module softcpu_subsystem (
     );
 
     //
-    // Address decode. ROM at 0x0xxxxxxx, work RAM at 0x1xxxxxxx. The status and
-    // disk-bridge regions (0x2/0x3) read back zero until the disk bridge lands.
+    // Address decode. ROM at 0x0xxxxxxx, work RAM at 0x1xxxxxxx, the disk bridge at
+    // 0x3xxxxxxx. The 0x2xxxxxxx status region is unused and reads back zero.
     //
     wire sel_rom = cpu_mem_valid && (cpu_mem_addr[31:28] == 4'h0);
     wire sel_ram = cpu_mem_valid && (cpu_mem_addr[31:28] == 4'h1);
+    wire sel_fdd = cpu_mem_valid && (cpu_mem_addr[31:28] == 4'h3);
 
     //
     // Memory ready. The ROM read is registered, so it needs two clk_pico cycles;
@@ -154,12 +184,57 @@ module softcpu_subsystem (
     wire [31:0] ram_rdata = {ram3_q, ram2_q, ram1_q, ram0_q};
 
     //
-    // CPU read mux. The disk-bridge and status regions return zero for now.
+    // Disk bridge: APF dataslot to floppy.v mgmt bus, mapped at 0x3xxxxxxx.
+    //
+    wire [31:0] fdd_rdata;
+
+    softcpu_fdd_bridge #(
+        .BRIDGE_ADDR(32'h60000000)
+    ) fdd_bridge (
+        .clk_pico   (clk_pico),
+        .clk_sys    (clk_sys),
+        .clk_74a    (clk_74a),
+        .reset      (reset),
+
+        .cpu_valid  (sel_fdd),
+        .cpu_addr   (cpu_mem_addr),
+        .cpu_wdata  (cpu_mem_wdata),
+        .cpu_wstrb  (cpu_mem_wstrb),
+        .cpu_rdata  (fdd_rdata),
+
+        .fdd_request(fdd_request),
+
+        .mgmt_addr  (mgmt_addr),
+        .mgmt_dout  (mgmt_dout),
+        .mgmt_wr    (mgmt_wr),
+        .mgmt_rd    (mgmt_rd),
+        .mgmt_din   (mgmt_din),
+
+        .bridge_wr      (bridge_wr),
+        .bridge_addr    (bridge_addr),
+        .bridge_wr_data (bridge_wr_data),
+
+        .target_dataslot_read       (target_dataslot_read),
+        .target_dataslot_write      (target_dataslot_write),
+        .target_dataslot_id         (target_dataslot_id),
+        .target_dataslot_slotoffset (target_dataslot_slotoffset),
+        .target_dataslot_bridgeaddr (target_dataslot_bridgeaddr),
+        .target_dataslot_length     (target_dataslot_length),
+        .target_dataslot_ack        (target_dataslot_ack),
+        .target_dataslot_done       (target_dataslot_done),
+        .target_dataslot_err        (target_dataslot_err),
+
+        .bridge_rd_data_out (bridge_rd_data_out)
+    );
+
+    //
+    // CPU read mux.
     //
     always_comb begin
         casez (cpu_mem_addr)
             32'h0???_????: cpu_mem_rdata = rom_rdata;
             32'h1???_????: cpu_mem_rdata = ram_rdata;
+            32'h3???_????: cpu_mem_rdata = fdd_rdata;
             default:       cpu_mem_rdata = 32'd0;
         endcase
     end
