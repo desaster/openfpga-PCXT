@@ -16,7 +16,7 @@
 #define FDD_TDS_OFFSET ((volatile uint32_t *) 0x30000024) // W: dataslot byte offset
 #define FDD_TDS_BRIDGE ((volatile uint32_t *) 0x30000028) // W: bridge address
 #define FDD_TDS_LENGTH ((volatile uint32_t *) 0x3000002C) // W: transfer length in bytes
-#define FDD_TDS_TRIG   ((volatile uint32_t *) 0x30000030) // W: bit0 read, bit1 write
+#define FDD_TDS_TRIG   ((volatile uint32_t *) 0x30000030) // W: bit0 read, bit1 write, bit2 flush
 #define FDD_TDS_STATUS ((volatile uint32_t *) 0x30000034) // R: bit0 done, bits[3:1] err
 #define FDD_TDS_CLR    ((volatile uint32_t *) 0x30000038) // W: bit0 clear done
 #define FDD_DISK_SIZE  ((volatile uint32_t *) 0x3000003C) // R: mounted image size in sectors
@@ -32,6 +32,7 @@
 // FDD_TDS_TRIG bits
 #define FDD_TDS_READ  (1 << 0)
 #define FDD_TDS_WRITE (1 << 1)
+#define FDD_TDS_FLUSH (1 << 2)
 
 // FDD_TDS_STATUS bits
 #define FDD_TDS_DONE (1 << 0)
