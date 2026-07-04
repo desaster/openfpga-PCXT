@@ -55,8 +55,9 @@
 #define SECTOR_BYTES    512
 #define SECTOR_WORDS    128
 
-// Dataslot id of the drive A: image. Must match the floppy slot in data.json.
-#define FDD0_SLOT_ID 1
+// Dataslot id of the drive A: image. Must match the floppy slot in data.json
+// (and the id core_top latches the image size for).
+#define FDD0_SLOT_ID 2
 
 // Service entry points (fdd_service.c).
 void fdd_mount(uint32_t sectors);

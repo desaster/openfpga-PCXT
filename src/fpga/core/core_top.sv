@@ -564,9 +564,11 @@ module core_top (
     // core_bridge_cmd's target_dataslot handshake and streams them over the
     // management bus. The image size is reported once as a dataslot update (bytes);
     // convert to sectors on the chipset clock and hand it to the firmware.
+    // Drive-A floppy image is dataslot id 2 (id 1 is the BIOS); keep in step with
+    // FDD0_SLOT_ID in the firmware and the floppy slot in data.json.
     reg [31:0] fdd_slot_bytes_74a = 32'd0;
     always @(posedge clk_74a) begin
-        if (dataslot_update && dataslot_update_id == 16'd1)
+        if (dataslot_update && dataslot_update_id == 16'd2)
             fdd_slot_bytes_74a <= dataslot_update_size;
     end
 

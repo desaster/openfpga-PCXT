@@ -11,6 +11,15 @@
         "extensions": ["rom", "bin"],
         "address": "0x10000000",
         "size_maximum": "0x10000"
+      },
+      {
+        "name": "Floppy Disk A",
+        "id": 2,
+        "required": false,
+        "parameters": "0x01",
+        "deferload": true,
+        "extensions": ["img", "ima", "dsk", "vfd"],
+        "size_maximum": "0x300000"
       }
     ]
   }
