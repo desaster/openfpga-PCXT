@@ -1,14 +1,22 @@
 // Disk-service firmware entry point.
 //
-// Placeholder: the PicoRV32 disk softcore RTL is not instantiated yet, so main
-// just parks the CPU. The floppy service loop (poll fdd_request, read the LBA,
-// pull the sector via the APF bridge, stream it into floppy.v's mgmt FIFO)
-// lands with the softcore port. Kept minimal so the firmware toolchain builds
-// and check-format is enforced from the start.
+// Wait for the host to report a mounted drive-A image, set up its geometry once,
+// then service controller requests forever. The heavy lifting lives in
+// fdd_service.c; this is just the top-level sequence.
+
+#include "softcpu_regs.h"
 
 int main(void)
 {
-    for (;;) {
+    uint32_t sectors;
+    while ((sectors = *FDD_DISK_SIZE) == 0) {
     }
+
+    fdd_mount(sectors);
+
+    for (;;) {
+        fdd_poll();
+    }
+
     return 0;
 }

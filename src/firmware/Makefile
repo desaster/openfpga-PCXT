@@ -1,7 +1,7 @@
 # PicoRV32 disk-softcore firmware build (LLVM toolchain, rv32im).
 # Produces firmware.vh, the $readmemh init image for the softcore ROM.
 
-OBJS = start.o main.o
+OBJS = start.o main.o fdd_service.o
 
 CC      = clang
 LD      = ld.lld
