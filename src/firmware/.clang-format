@@ -1,0 +1,17 @@
+BasedOnStyle: LLVM
+IndentWidth: 4
+ContinuationIndentWidth: 8
+AlignAfterOpenBracket: DontAlign
+Cpp11BracedListStyle: false
+SpaceAfterCStyleCast: true
+BreakBeforeBraces: Linux
+ColumnLimit: 100
+PointerAlignment: Right
+SortIncludes: false
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: false
+AlwaysBreakBeforeMultilineStrings: true
+InsertBraces: true
+AlignConsecutiveMacros: Consecutive
