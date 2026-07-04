@@ -765,7 +765,8 @@ set_global_assignment -name SYSTEMVERILOG_FILE core/data_loader.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/sound_i2s.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/sync_fifo.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/ps2_device.sv
-set_global_assignment -name SYSTEMVERILOG_FILE core/pocket_ps2_kbd.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/hid_to_ps2.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/pocket_keyboard.sv
 # core_constraints.sdc is pulled in by apf_constraints.sdc via read_sdc
 # (after derive_pll_clocks); do not add it as an SDC_FILE here too.
 

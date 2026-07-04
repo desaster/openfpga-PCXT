@@ -360,7 +360,7 @@ module core_top (
     assign forced_scandoubler = 1'b0;
     assign buttons            = 2'b00;
 
-    // Keyboard driven by pocket_ps2_kbd (instantiated below, near CHIPSET);
+    // Keyboard driven by pocket_keyboard (instantiated below, near CHIPSET);
     // it sources ps2_kbd_clk_in / ps2_kbd_data_in. Mouse/joystick idle for now.
     assign ps2_mouse_clk_out  = 1'b1;   // CHIPSET mouse input, idle
     assign ps2_mouse_data_out = 1'b1;
@@ -1194,14 +1194,17 @@ module core_top (
     end
 
     //
-    // Keyboard: Pocket controller buttons -> PS/2 device -> CHIPSET.
-    // Drives the ps2_kbd_*_in lines feeding the device_clock/device_data
+    // Keyboard: controller buttons + docked USB keyboard -> one PS/2 device ->
+    // CHIPSET. Drives the ps2_kbd_*_in lines feeding the device_clock/device_data
     // synchronisers above; replaces the former idle-high tie-offs.
     //
-    pocket_ps2_kbd u_pocket_ps2_kbd (
+    pocket_keyboard u_pocket_keyboard (
         .clk          (clk_chipset),
         .reset        (reset),
         .buttons      (cont1_key),
+        .cont3_joy    (cont3_joy),
+        .cont3_trig   (cont3_trig),
+        .cont3_key    (cont3_key),
         .ps2_clk_host (ps2_kbd_clk_out),
         .ps2_dat_host (ps2_kbd_data_out),
         .ps2_clk_dev  (ps2_kbd_clk_in),
