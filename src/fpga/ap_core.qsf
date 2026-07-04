@@ -767,6 +767,11 @@ set_global_assignment -name SYSTEMVERILOG_FILE core/sync_fifo.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/ps2_device.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/hid_to_ps2.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pocket_keyboard.sv
+
+# Disk-service softcore: a PicoRV32 CPU (ISC) with a firmware ROM. Runs the
+# service loop that pulls floppy sectors from an APF dataslot into floppy.v.
+set_global_assignment -name VERILOG_FILE core/picorv32.v
+set_global_assignment -name VERILOG_FILE core/sprom.v
 # core_constraints.sdc is pulled in by apf_constraints.sdc via read_sdc
 # (after derive_pll_clocks); do not add it as an SDC_FILE here too.
 
