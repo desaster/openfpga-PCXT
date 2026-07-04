@@ -764,6 +764,8 @@ set_global_assignment -name VERILOG_FILE core/core_bridge_cmd.v
 set_global_assignment -name SYSTEMVERILOG_FILE core/data_loader.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/sound_i2s.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/sync_fifo.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/ps2_device.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/pocket_ps2_kbd.sv
 # core_constraints.sdc is pulled in by apf_constraints.sdc via read_sdc
 # (after derive_pll_clocks); do not add it as an SDC_FILE here too.
 
@@ -823,4 +825,4 @@ set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/Chipset.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/Bus_Arbiter.sv"
 
 set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top
-set_global_assignment -name SEED 5
+set_global_assignment -name SEED 3
