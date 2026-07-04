@@ -42,6 +42,7 @@ module softcpu_subsystem (
     // APF target-dataslot transfer handshake
     output        target_dataslot_read,
     output        target_dataslot_write,
+    output        target_dataslot_flush,
     output [15:0] target_dataslot_id,
     output [31:0] target_dataslot_slotoffset,
     output [31:0] target_dataslot_bridgeaddr,
@@ -220,6 +221,7 @@ module softcpu_subsystem (
 
         .target_dataslot_read       (target_dataslot_read),
         .target_dataslot_write      (target_dataslot_write),
+        .target_dataslot_flush      (target_dataslot_flush),
         .target_dataslot_id         (target_dataslot_id),
         .target_dataslot_slotoffset (target_dataslot_slotoffset),
         .target_dataslot_bridgeaddr (target_dataslot_bridgeaddr),

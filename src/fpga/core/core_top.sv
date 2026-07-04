@@ -269,13 +269,24 @@ module core_top (
     assign aux_scl                 = 1'bZ;
     assign vpll_feed               = 1'bZ;
 
-    // Bridge reads: the APF command / data-table window (0xF8xxxxxx) reads back
-    // from core_bridge_cmd; everything else returns 0. ROM-load is write-only over
-    // the bridge, so it contributes no read source here.
+    // Bridge reads: the command / data-table window (0xF8xxxxxx) reads back from
+    // core_bridge_cmd; the softcore bridge RAM (0x6xxxxxxx) reads back for dataslot
+    // writes; everything else returns 0.
+    //
+    // The APF captures bridge_rd_data before it pulses bridge_rd, so the RAM read-back
+    // is registered on bridge_rd; read combinationally it would lead the address by
+    // one word. core_bridge_cmd already registers its own read.
     wire [31:0] cmd_bridge_rd_data;
+    wire [31:0] softcpu_bridge_rd_data;
+    reg  [31:0] softcpu_rd_data_buf;
+    always @(posedge clk_74a) begin
+        if (bridge_rd)
+            softcpu_rd_data_buf <= softcpu_bridge_rd_data;
+    end
     always @(*) begin
         casex (bridge_addr)
             32'hF8xxxxxx: bridge_rd_data = cmd_bridge_rd_data;
+            32'h6xxxxxxx: bridge_rd_data = softcpu_rd_data_buf;
             default:      bridge_rd_data = 32'd0;
         endcase
     end
@@ -475,6 +486,7 @@ module core_top (
     // Target-dataslot: the disk softcore initiates host reads of floppy images.
     wire        target_dataslot_read;
     wire        target_dataslot_write;
+    wire        target_dataslot_flush;
     wire [15:0] target_dataslot_id;
     wire [31:0] target_dataslot_slotoffset;
     wire [31:0] target_dataslot_bridgeaddr;
@@ -545,6 +557,7 @@ module core_top (
 
         .target_dataslot_read      (target_dataslot_read),
         .target_dataslot_write     (target_dataslot_write),
+        .target_dataslot_flush     (target_dataslot_flush),
         .target_dataslot_ack       (target_dataslot_ack),
         .target_dataslot_done      (target_dataslot_done),
         .target_dataslot_err       (target_dataslot_err),
@@ -600,6 +613,7 @@ module core_top (
 
         .target_dataslot_read       (target_dataslot_read),
         .target_dataslot_write      (target_dataslot_write),
+        .target_dataslot_flush      (target_dataslot_flush),
         .target_dataslot_id         (target_dataslot_id),
         .target_dataslot_slotoffset (target_dataslot_slotoffset),
         .target_dataslot_bridgeaddr (target_dataslot_bridgeaddr),
@@ -608,7 +622,7 @@ module core_top (
         .target_dataslot_done       (target_dataslot_done),
         .target_dataslot_err        (target_dataslot_err),
 
-        .bridge_rd_data_out         ()
+        .bridge_rd_data_out         (softcpu_bridge_rd_data)
     );
 
     // ---- ROM-load download tracking ----

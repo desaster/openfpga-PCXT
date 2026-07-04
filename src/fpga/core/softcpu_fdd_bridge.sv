@@ -8,7 +8,8 @@
 //   reads it back (for disk writes) over the bridge_* port, and the firmware moves
 //   dataslot transfers with the target_dataslot_* handshake. Byte 0 of a dataslot
 //   arrives in bridge_wr_data[31:24], so port-A writes reverse the four bytes to
-//   land it little-endian in the RAM.
+//   land it little-endian in the RAM, and the read-back reverses them again so byte
+//   0 leaves in bridge_rd_data_out[31:24].
 //
 //   Controller side: a generic master for floppy.v's management bus. The firmware
 //   composes one mgmt transaction at a time (a floppy register, optional write
@@ -65,6 +66,7 @@ module softcpu_fdd_bridge #(
     // APF target-dataslot transfer handshake
     output wire        target_dataslot_read,
     output wire        target_dataslot_write,
+    output wire        target_dataslot_flush,
     output reg  [15:0] target_dataslot_id,
     output reg  [31:0] target_dataslot_slotoffset,
     output reg  [31:0] target_dataslot_bridgeaddr,
@@ -80,7 +82,8 @@ module softcpu_fdd_bridge #(
     // Bridge RAM: 256 x 32, bidirectional dual-port.
     //   Port A (clk_74a): APF DMA writes for reads, read-back for writes.
     //   Port B (clk_pico): firmware access via the FDD_BRAM registers.
-    // Port-A writes reverse the four bytes so dataslot byte 0 lands little-endian.
+    // Port-A writes reverse the four bytes so dataslot byte 0 lands little-endian;
+    // the read-back reverses them again so byte 0 leaves in the high bus byte.
     //
     wire [31:0] bram_q_a;
     wire [31:0] bram_q_b;
@@ -89,7 +92,8 @@ module softcpu_fdd_bridge #(
     reg  [31:0] bram_data_b;
     reg         bram_wren_b;
 
-    assign bridge_rd_data_out = bram_q_a;
+    assign bridge_rd_data_out = {bram_q_a[7:0], bram_q_a[15:8],
+                                 bram_q_a[23:16], bram_q_a[31:24]};
 
     altsyncram bridgeram (
         .clock0    (clk_74a),
@@ -173,15 +177,18 @@ module softcpu_fdd_bridge #(
     end
 
     //
-    // Target-dataslot handshake. tds_read / tds_write assert on the firmware trigger
-    // and clear when the APF acknowledges; the clk_74a-domain outputs go through
-    // synch_3. done is latched on its rising edge, since the APF holds it high until
-    // the next command and a level test would re-fire a completed transfer.
+    // Target-dataslot handshake. tds_read / tds_write / tds_flush assert on the
+    // firmware trigger and clear when the APF acknowledges; the clk_74a-domain
+    // outputs go through synch_3. done is latched on its rising edge, since the APF
+    // holds it high until the next command and a level test would re-fire a
+    // completed transfer.
     //
     reg tds_read_r;
     reg tds_write_r;
+    reg tds_flush_r;
     synch_3 tds_read_sync (.i(tds_read_r), .o(target_dataslot_read), .clk(clk_74a));
     synch_3 tds_write_sync (.i(tds_write_r), .o(target_dataslot_write), .clk(clk_74a));
+    synch_3 tds_flush_sync (.i(tds_flush_r), .o(target_dataslot_flush), .clk(clk_74a));
 
     wire target_dataslot_ack_s;
     wire target_dataslot_done_rise;
@@ -194,6 +201,7 @@ module softcpu_fdd_bridge #(
 
     reg tds_read_pulse;
     reg tds_write_pulse;
+    reg tds_flush_pulse;
     reg clr_done_pulse;
 
     always @(posedge clk_sys) begin
@@ -205,9 +213,14 @@ module softcpu_fdd_bridge #(
             tds_write_r <= 1'b1;
             tds_done    <= 1'b0;
         end
+        if (tds_flush_pulse) begin
+            tds_flush_r <= 1'b1;
+            tds_done    <= 1'b0;
+        end
         if (target_dataslot_ack_s) begin
             tds_read_r  <= 1'b0;
             tds_write_r <= 1'b0;
+            tds_flush_r <= 1'b0;
         end
         if (target_dataslot_done_rise) begin
             tds_done <= 1'b1;
@@ -219,6 +232,7 @@ module softcpu_fdd_bridge #(
         if (reset) begin
             tds_read_r  <= 1'b0;
             tds_write_r <= 1'b0;
+            tds_flush_r <= 1'b0;
             tds_done    <= 1'b0;
             tds_err     <= 3'd0;
         end
@@ -254,6 +268,7 @@ module softcpu_fdd_bridge #(
         mgmt_rd_req     <= 1'b0;
         tds_read_pulse  <= 1'b0;
         tds_write_pulse <= 1'b0;
+        tds_flush_pulse <= 1'b0;
         clr_done_pulse  <= 1'b0;
 
         cpu_valid_prev <= cpu_valid;
@@ -286,6 +301,7 @@ module softcpu_fdd_bridge #(
                 8'h30: begin
                     if (cpu_wdata[0]) tds_read_pulse  <= 1'b1;
                     if (cpu_wdata[1]) tds_write_pulse <= 1'b1;
+                    if (cpu_wdata[2]) tds_flush_pulse <= 1'b1;
                 end
                 8'h38: if (cpu_wdata[0]) clr_done_pulse <= 1'b1;
             endcase

@@ -15,6 +15,15 @@
 // because it should report PLL lock status
 //
 
+//
+// Local modification (PCXT Pocket port): added the target command 0x0188
+// "data slot flush" beside the template's 0x0180/0x0184 read and write, so the
+// disk softcore can force written floppy sectors out to SD. The delta is the
+// target_dataslot_flush input, its rising-edge queue, and a 0x0188 branch in the
+// target-command FSM; everything else is agg23's template verbatim. Diff against
+// the openFPGA template to see it; see docs/ACKNOWLEDGEMENTS.md.
+//
+
 module core_bridge_cmd (
 
 input   wire            clk,
@@ -76,6 +85,7 @@ input   wire            savestate_load_err,
 
 input   wire            target_dataslot_read,       // rising edge triggered
 input   wire            target_dataslot_write,
+input   wire            target_dataslot_flush,      // 0x0188, local addition
 
 output  reg             target_dataslot_ack,        // asserted upon command start until completion
 output  reg             target_dataslot_done,       // asserted upon command finish until next command is issued    
@@ -176,7 +186,8 @@ localparam  [3:0]   TARG_ST_WAITRESULT_DSO  = 'd15;
     reg             status_setup_done_1, status_setup_done_queue;
     reg             target_dataslot_read_1, target_dataslot_read_queue;
     reg             target_dataslot_write_1, target_dataslot_write_queue;
-    
+    reg             target_dataslot_flush_1, target_dataslot_flush_queue;
+
     
 initial begin
     reset_n <= 0;
@@ -192,6 +203,7 @@ initial begin
     status_setup_done_queue <= 0;
     target_dataslot_read_queue <= 0;
     target_dataslot_write_queue <= 0;
+    target_dataslot_flush_queue <= 0;
     target_dataslot_ack <= 0;
     target_dataslot_done <= 0;
     target_dataslot_err <= 0;
@@ -204,7 +216,8 @@ always @(posedge clk) begin
     status_setup_done_1 <= status_setup_done;
     target_dataslot_read_1 <= target_dataslot_read;
     target_dataslot_write_1 <= target_dataslot_write;
-    
+    target_dataslot_flush_1 <= target_dataslot_flush;
+
     if(status_setup_done & ~status_setup_done_1) begin
         status_setup_done_queue <= 1;
     end
@@ -214,7 +227,10 @@ always @(posedge clk) begin
     if(target_dataslot_write & ~target_dataslot_write_1) begin
         target_dataslot_write_queue <= 1;
     end
-    
+    if(target_dataslot_flush & ~target_dataslot_flush_1) begin
+        target_dataslot_flush_queue <= 1;
+    end
+
     
     b_datatable_wren <= 0;
     b_datatable_addr <= bridge_addr >> 2;
@@ -477,14 +493,23 @@ always @(posedge clk) begin
         end else if(target_dataslot_write_queue) begin
             target_dataslot_write_queue <= 0;
             target_0[15:0] <= 16'h0184;
-            
+
             target_20 <= target_dataslot_id;
             target_24 <= target_dataslot_slotoffset;
             target_28 <= target_dataslot_bridgeaddr;
             target_2C <= target_dataslot_length;
-            
+
             tstate <= TARG_ST_DATASLOTOP;
-        end 
+
+        end else if(target_dataslot_flush_queue) begin
+            // local addition: 0x0188 data slot flush, one parameter (slot id)
+            target_dataslot_flush_queue <= 0;
+            target_0[15:0] <= 16'h0188;
+
+            target_20 <= target_dataslot_id;
+
+            tstate <= TARG_ST_DATASLOTOP;
+        end
     end
     TARG_ST_READYTORUN: begin
         target_0 <= 32'h636D_0140;
