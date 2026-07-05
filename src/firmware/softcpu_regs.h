@@ -19,7 +19,8 @@
 #define FDD_TDS_TRIG   ((volatile uint32_t *) 0x30000030) // W: bit0 read, bit1 write, bit2 flush
 #define FDD_TDS_STATUS ((volatile uint32_t *) 0x30000034) // R: bit0 done, bits[3:1] err
 #define FDD_TDS_CLR    ((volatile uint32_t *) 0x30000038) // W: bit0 clear done
-#define FDD_DISK_SIZE  ((volatile uint32_t *) 0x3000003C) // R: mounted image size in sectors
+#define FDD_DISK_SIZE  ((volatile uint32_t *) 0x3000003C) // R: drive-A image size in sectors
+#define FDD1_DISK_SIZE ((volatile uint32_t *) 0x30000040) // R: drive-B image size in sectors
 
 // FDD_REQUEST bits
 #define FDD_REQ_READ  (1 << 0)
@@ -56,12 +57,13 @@
 #define SECTOR_BYTES    512
 #define SECTOR_WORDS    128
 
-// Dataslot id of the drive A: image. Must match the floppy slot in data.json
-// (and the id core_top latches the image size for).
+// Dataslot ids of the drive-A and drive-B images. Must match the floppy slots in
+// data.json (and the ids core_top latches the image sizes for).
 #define FDD0_SLOT_ID 2
+#define FDD1_SLOT_ID 3
 
 // Service entry points (fdd_service.c).
-void fdd_mount(uint32_t sectors);
+void fdd_mount(uint32_t drive, uint32_t sectors);
 void fdd_poll(void);
 
 #endif

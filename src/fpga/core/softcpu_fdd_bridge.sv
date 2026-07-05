@@ -48,8 +48,9 @@ module softcpu_fdd_bridge #(
     // floppy.v request flags, clk_sys: {write-pending, read-pending}
     input  wire  [1:0] fdd_request,
 
-    // Mounted drive-A image size in sectors (from the host dataslot table)
+    // Mounted image size in sectors, per drive (from the host dataslot table)
     input  wire [31:0] disk_size,
+    input  wire [31:0] disk_size_b,
 
     // Management-bus master to floppy.v via CHIPSET, clk_sys
     output wire [15:0] mgmt_addr,
@@ -250,6 +251,7 @@ module softcpu_fdd_bridge #(
                 8'h18:   cpu_rdata = bram_q_b;
                 8'h34:   cpu_rdata = {28'd0, tds_err, tds_done};
                 8'h3C:   cpu_rdata = disk_size;
+                8'h40:   cpu_rdata = disk_size_b;
                 default: cpu_rdata = 32'd0;
             endcase
         end

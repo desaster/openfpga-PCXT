@@ -20,6 +20,15 @@
         "deferload": true,
         "extensions": ["img", "ima", "dsk", "vfd"],
         "size_maximum": "0x300000"
+      },
+      {
+        "name": "Floppy Disk B",
+        "id": 3,
+        "required": false,
+        "parameters": "0x01",
+        "deferload": true,
+        "extensions": ["img", "ima", "dsk", "vfd"],
+        "size_maximum": "0x300000"
       }
     ]
   }

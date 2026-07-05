@@ -1,12 +1,13 @@
 // Floppy service loop for the PicoRV32 disk softcore.
 //
 // The controller (floppy.v) raises a request whenever it needs to move a sector,
-// and this code answers it over the management bus. A read request: fetch the LBA,
-// pull that sector from the drive-A dataslot into the bridge RAM over the APF
-// target-dataslot handshake, then stream the 512 bytes into the controller's
-// management FIFO. A write request is the mirror: drain the 512 bytes the
-// controller has queued in that FIFO into the bridge RAM, then persist them to the
-// dataslot. Each pass moves one sector and runs again while the request holds.
+// and this code answers it over the management bus. A read request: fetch the LBA
+// and drive, pull that sector from the selected drive's image dataslot into the
+// bridge RAM over the APF target-dataslot handshake, then stream the 512 bytes into
+// the controller's management FIFO. A write request is the mirror: drain the 512
+// bytes the controller has queued in that FIFO into the bridge RAM, then persist
+// them to the dataslot. Each pass moves one sector and runs again while the request
+// holds.
 //
 // Written sectors reach the SD file through target-dataslot writes.
 //
@@ -80,7 +81,7 @@ static void pull_fifo(uint32_t drive)
     }
 }
 
-// Persist the 512 bytes now in the bridge RAM to the drive-A dataslot at this LBA
+// Persist the 512 bytes now in the bridge RAM to a drive's dataslot at this LBA
 // over the APF target-dataslot write handshake. Mirror of pull_sector.
 static void write_sector(uint32_t slot_id, uint32_t lba)
 {
@@ -122,10 +123,11 @@ static void spin(uint32_t n)
     }
 }
 
-// Derive the drive-A geometry from the image size (in sectors) and push it to the
+// Derive a drive's geometry from its image size (in sectors) and push it to the
 // controller, ejecting first so the controller flags a media change, then marking
-// the media present and writable.
-void fdd_mount(uint32_t sectors)
+// the media present and writable. drive selects the controller's drive A (0) or B
+// (1) via the management-bus drive bit.
+void fdd_mount(uint32_t drive, uint32_t sectors)
 {
     const struct fdd_geom *g = &fdd_geoms[0];
     for (int i = 0; i < (int) (sizeof(fdd_geoms) / sizeof(fdd_geoms[0])); i++) {
@@ -135,29 +137,35 @@ void fdd_mount(uint32_t sectors)
         }
     }
 
-    mgmt_write(0, FMGMT_PRESENT, 0);
+    mgmt_write(drive, FMGMT_PRESENT, 0);
     spin(100000);
-    mgmt_write(0, FMGMT_CYLS, g->cyls);
-    mgmt_write(0, FMGMT_SPT, g->spt);
-    mgmt_write(0, FMGMT_TOTAL, g->cyls * g->spt * g->heads);
-    mgmt_write(0, FMGMT_HEADS, g->heads);
-    mgmt_write(0, FMGMT_WRPROT, 0);
-    mgmt_write(0, FMGMT_PRESENT, 1);
+    mgmt_write(drive, FMGMT_CYLS, g->cyls);
+    mgmt_write(drive, FMGMT_SPT, g->spt);
+    mgmt_write(drive, FMGMT_TOTAL, g->cyls * g->spt * g->heads);
+    mgmt_write(drive, FMGMT_HEADS, g->heads);
+    mgmt_write(drive, FMGMT_WRPROT, 0);
+    mgmt_write(drive, FMGMT_PRESENT, 1);
 }
 
-// Answer one pending controller request. A read pulls the sector from the dataslot
-// and streams it to the controller FIFO; a write drains the FIFO and persists it to
-// the dataslot. Writes reach the SD file directly, so nothing else is needed here.
+// Answer one pending controller request. Register 0 reports the active request's
+// drive in bit 15 and the LBA in the low bits, so it selects which image dataslot
+// the sector is moved to or from. A read pulls the sector from that dataslot and
+// streams it to the controller FIFO; a write drains the FIFO and persists it to that
+// dataslot. The reg-0 read and the FIFO are drive-agnostic in floppy.v, so only the
+// slot id is keyed on the drive. Writes reach the SD file directly, so nothing else
+// is needed here.
 void fdd_poll(void)
 {
     uint32_t req = *FDD_REQUEST;
     if (req & FDD_REQ_READ) {
-        uint32_t lba = mgmt_read(0, FMGMT_PRESENT) & FDD_LBA_MASK;
-        pull_sector(FDD0_SLOT_ID, lba);
+        uint32_t reg0 = mgmt_read(0, FMGMT_PRESENT);
+        uint32_t slot = (reg0 & FDD_LBA_DRIVE) ? FDD1_SLOT_ID : FDD0_SLOT_ID;
+        pull_sector(slot, reg0 & FDD_LBA_MASK);
         push_sector(0);
     } else if (req & FDD_REQ_WRITE) {
-        uint32_t lba = mgmt_read(0, FMGMT_PRESENT) & FDD_LBA_MASK;
+        uint32_t reg0 = mgmt_read(0, FMGMT_PRESENT);
+        uint32_t slot = (reg0 & FDD_LBA_DRIVE) ? FDD1_SLOT_ID : FDD0_SLOT_ID;
         pull_fifo(0);
-        write_sector(FDD0_SLOT_ID, lba);
+        write_sector(slot, reg0 & FDD_LBA_MASK);
     }
 }

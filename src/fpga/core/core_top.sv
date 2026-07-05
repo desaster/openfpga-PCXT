@@ -577,21 +577,32 @@ module core_top (
     // core_bridge_cmd's target_dataslot handshake and streams them over the
     // management bus. The image size is reported once as a dataslot update (bytes);
     // convert to sectors on the chipset clock and hand it to the firmware.
-    // Drive-A floppy image is dataslot id 2 (id 1 is the BIOS); keep in step with
-    // FDD0_SLOT_ID in the firmware and the floppy slot in data.json.
-    reg [31:0] fdd_slot_bytes_74a = 32'd0;
+    // Floppy images are dataslot id 2 (drive A) and id 3 (drive B); id 1 is the
+    // BIOS. Keep in step with FDD0_SLOT_ID / FDD1_SLOT_ID in the firmware and the
+    // floppy slots in data.json.
+    reg [31:0] fdd_slot_bytes_74a   = 32'd0;
+    reg [31:0] fdd_slot_bytes_b_74a = 32'd0;
     always @(posedge clk_74a) begin
         if (dataslot_update && dataslot_update_id == 16'd2)
             fdd_slot_bytes_74a <= dataslot_update_size;
+        if (dataslot_update && dataslot_update_id == 16'd3)
+            fdd_slot_bytes_b_74a <= dataslot_update_size;
     end
 
     wire [31:0] fdd_slot_bytes;
+    wire [31:0] fdd_slot_bytes_b;
     synch_3 #(.WIDTH(32)) s_fdd_size (
         .i   (fdd_slot_bytes_74a),
         .o   (fdd_slot_bytes),
         .clk (clk_chipset)
     );
-    wire [31:0] fdd_disk_sectors = fdd_slot_bytes >> 9;   // bytes / 512
+    synch_3 #(.WIDTH(32)) s_fdd_size_b (
+        .i   (fdd_slot_bytes_b_74a),
+        .o   (fdd_slot_bytes_b),
+        .clk (clk_chipset)
+    );
+    wire [31:0] fdd_disk_sectors   = fdd_slot_bytes   >> 9;   // bytes / 512
+    wire [31:0] fdd_disk_sectors_b = fdd_slot_bytes_b >> 9;   // bytes / 512
 
     softcpu_subsystem u_softcpu (
         .clk_sys                    (clk_chipset),
@@ -600,6 +611,7 @@ module core_top (
 
         .fdd_request                (mgmt_req[7:6]),
         .fdd_disk_size              (fdd_disk_sectors),
+        .fdd_disk_size_b            (fdd_disk_sectors_b),
 
         .mgmt_addr                  (mgmt_addr),
         .mgmt_dout                  (mgmt_dout),
