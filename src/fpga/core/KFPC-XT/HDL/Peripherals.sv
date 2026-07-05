@@ -947,15 +947,17 @@ end
     logic          cga_address_enable_n_1;
     logic          cga_address_enable_n_2;
     localparam int SPLASH_COPY_SIZE = 4000;
-    localparam int TEXT_CLEAR_SIZE = 131072;
+    // 16 KB CGA VRAM. The clear address width sets the inferred RAM depth, so a 14-bit
+    // clear lets synthesis trim the VRAM to 16 KB (the declared AW=17 would give 128 KB).
+    localparam int TEXT_CLEAR_SIZE = 16384;
     localparam [11:0] SPLASH_COPY_LAST = SPLASH_COPY_SIZE - 1;
-    localparam [16:0] TEXT_CLEAR_LAST = TEXT_CLEAR_SIZE - 1;
+    localparam [13:0] TEXT_CLEAR_LAST = TEXT_CLEAR_SIZE - 1;
     logic         splashscreen_ff = 1'b0;
     logic         splash_copy_active = 1'b0;
     logic [11:0]  splash_copy_addr = 12'd0;
     logic         splash_clear_active = 1'b0;
     logic         splash_clear_pending = 1'b0;
-    logic [16:0]  splash_clear_addr = 17'd0;
+    logic [13:0]  splash_clear_addr = 14'd0;
     wire          splash_copy_start = splashscreen & ~splashscreen_ff;
     wire          splash_clear_start = ~splashscreen & splashscreen_ff;
     wire          status0_clear_start = status0_clear;
@@ -1025,24 +1027,24 @@ end
         begin
             splash_clear_active  <= 1'b1;
             splash_clear_pending <= 1'b0;
-            splash_clear_addr    <= 17'd0;
+            splash_clear_addr    <= 14'd0;
         end
         else if (splash_clear_active)
         begin
             if (splash_clear_addr == TEXT_CLEAR_LAST)
             begin
                 splash_clear_active <= 1'b0;
-                splash_clear_addr   <= 17'd0;
+                splash_clear_addr   <= 14'd0;
             end
             else
             begin
-                splash_clear_addr <= splash_clear_addr + 17'd1;
+                splash_clear_addr <= splash_clear_addr + 14'd1;
             end
         end
         else
         begin
             splash_clear_active <= 1'b0;
-            splash_clear_addr   <= 17'd0;
+            splash_clear_addr   <= 14'd0;
         end
     end
 
@@ -1342,7 +1344,7 @@ end
         .data       (splash_rom_data)
     );
 
-    wire [16:0] cga_copy_addr  = splash_copy_active ? {5'd0, splash_copy_addr} : splash_clear_addr;
+    wire [13:0] cga_copy_addr  = splash_copy_active ? {2'd0, splash_copy_addr} : splash_clear_addr;
     wire [7:0]  cga_copy_data  = splash_copy_active ? splash_rom_data : splash_clear_data;
     wire [16:0] cga_vram_addra = `ENABLE_CGA ? (cga_vram_copy ? cga_copy_addr :
                                  (tandy_video_en ? (video_mem_select_1 ? video_ram_address :

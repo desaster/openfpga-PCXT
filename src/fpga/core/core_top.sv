@@ -352,7 +352,7 @@ module core_top (
 
     wire VGA_VBlank_border;
     wire std_hsyncwidth;
-    wire pause_core;
+    wire pause_core_chipset;
     wire swap_video;
 
     always @(posedge clk_chipset)
@@ -442,9 +442,8 @@ module core_top (
     wire RESET = ~pll_locked | ~pll_video_locked;
     // ROM-load reset hold: keep the machine in reset while APF streams a slot,
     // and from power-on until the first load completes, so the CPU never runs
-    // without a BIOS. This mirrors how upstream held reset across the boot
-    // splash window (the BIOS FSM writes via the SDRAM path, which is on the
-    // separate reset_sdram and stays up). Driven in the ROM-load glue below.
+    // without a BIOS. The BIOS write path is on the separate reset_sdram, which
+    // stays up. Driven in the ROM-load glue below.
     wire        is_downloading;      // APF slot load active (clk_chipset)
     wire        load_active;         // is_downloading OR the FIFO still draining
     reg         bios_ever_loaded = 1'b0;
@@ -462,6 +461,10 @@ module core_top (
     reg  [1:0] wp_cfg_74a        = 2'd0;   // floppy write-protect {B:, A:}
     reg  [1:0] opl2_cfg_74a      = 2'd0;   // OPL2 port: 0=Adlib 388h, 1=SB FM 228h, 2=off
     reg  [1:0] boost_cfg_74a     = 2'd0;   // audio boost: 0=none, 1=2x, 2=4x (compressor)
+    reg        splash_cfg_74a    = 1'b1;   // boot splash enable (default on)
+    reg        credits_active_74a = 1'b0;  // credits showing: set by the menu action, cleared by any button
+    wire       any_btn_74a;                // any Pocket controller-1 button, synced to this domain
+    synch_3 s_anybtn (|cont1_key, any_btn_74a, clk_74a);
     always @(posedge clk_74a) begin
         if (interact_reset_delay != 20'd0)
             interact_reset_delay <= interact_reset_delay - 20'd1;
@@ -472,9 +475,15 @@ module core_top (
                 32'h0000_0064: palette_cfg_74a   <= bridge_wr_data[2:0];
                 32'h0000_006C: wp_cfg_74a        <= bridge_wr_data[1:0];
                 32'h0000_0070: opl2_cfg_74a      <= bridge_wr_data[1:0];
+                32'h0000_0068: splash_cfg_74a    <= bridge_wr_data[0];
                 32'h0000_0074: boost_cfg_74a     <= bridge_wr_data[1:0];
+                32'h0000_0078: credits_active_74a <= 1'b1;         // Show Credits (start)
             endcase
         end
+        // No debounce needed on the dismiss: the button that closes the interact menu is
+        // consumed by the OS and never reaches the core.
+        if (any_btn_74a)
+            credits_active_74a <= 1'b0;
     end
     wire       interact_reset;
     wire [1:0] cpu_speed_cfg;
@@ -489,8 +498,14 @@ module core_top (
     synch_3 #(.WIDTH(2)) s_opl2_cfg       (opl2_cfg_74a,      opl2_cfg,      clk_chipset);
     synch_3 #(.WIDTH(2)) s_boost_cfg      (boost_cfg_74a,     boost_cfg,     clk_chipset);
     synch_3 #(.WIDTH(3)) s_palette_cfg    (palette_cfg_74a,   palette_cfg,   clk_pix);
+    wire credits_mode_pix;
+    wire credits_mode_chip;
+    synch_3 s_credits_pix  (credits_active_74a, credits_mode_pix,  clk_pix);
+    synch_3 s_credits_chip (credits_active_74a, credits_mode_chip, clk_chipset);
+    wire pause_core = pause_core_chipset | credits_mode_chip;
 
-    wire reset_wire = RESET | status[0] | load_active | ~bios_ever_loaded | interact_reset;
+    wire reset_wire = RESET | status[0] | load_active | ~bios_ever_loaded | interact_reset
+                    | splashscreen_sync2 | splash_reset_hold | splash_pending_sync2;
     wire video_retime_reset = RESET;
     wire reset_sdram_wire = RESET;
 
@@ -1138,7 +1153,8 @@ module core_top (
     reg [3:0] splash_cnt2 = 0;
     reg splashscreen = 1'b0;
     reg splash_pending = 1'b1;
-    reg [23:0] splash_boot_cnt = 24'd0;
+    reg splash_pending_sync1 = 1'b1;
+    reg splash_pending_sync2 = 1'b1;
     reg splashscreen_sync1 = 0;
     reg splashscreen_sync2 = 0;
     reg splashscreen_sync_prev = 0;
@@ -1152,11 +1168,14 @@ module core_top (
     reg phys_reset_hold = 0;
     reg [23:0] phys_reset_cnt = 24'd0;
     localparam [23:0] PHYS_RESET_HOLD = 24'd2863600;
-    localparam [23:0] SPLASH_BOOT_WAIT = 24'd14318000;
+    wire splash_on_14;
+    wire bios_ever_loaded_14;
+    synch_3 s_splash_on      (splash_cfg_74a,   splash_on_14,        clk_14_318);
+    synch_3 s_bios_loaded_14 (bios_ever_loaded, bios_ever_loaded_14, clk_14_318);
 
     always @ (posedge clk_14_318)
     begin
-        splash_off <= status[7];
+        splash_off <= ~splash_on_14;
         if (RESET || buttons[1])
         begin
             phys_reset_hold <= 1'b1;
@@ -1172,21 +1191,17 @@ module core_top (
 
         if (splash_pending)
         begin
-            if (~splash_off)
+            // Hold until the BIOS has streamed in, then show the splash (or, if it is
+            // disabled, release straight to POST).
+            if (bios_ever_loaded_14)
             begin
-                splashscreen <= 1'b1;
-                splash_cnt <= 0;
-                splash_cnt2 <= 0;
+                if (~splash_off)
+                begin
+                    splashscreen <= 1'b1;
+                    splash_cnt <= 0;
+                    splash_cnt2 <= 0;
+                end
                 splash_pending <= 1'b0;
-                splash_boot_cnt <= 24'd0;
-            end
-            else if (splash_boot_cnt == SPLASH_BOOT_WAIT)
-            begin
-                splash_pending <= 1'b0;
-            end
-            else
-            begin
-                splash_boot_cnt <= splash_boot_cnt + 24'd1;
             end
         end
         else if (splashscreen)
@@ -1215,6 +1230,8 @@ module core_top (
         splashscreen_sync1 <= splashscreen;
         splashscreen_sync2 <= splashscreen_sync1;
         splashscreen_sync_prev <= splashscreen_sync2;
+        splash_pending_sync1 <= splash_pending;
+        splash_pending_sync2 <= splash_pending_sync1;
         status0_sync1 <= status[0];
         status0_sync2 <= status0_sync1;
         status0_sync_prev <= status0_sync2;
@@ -1473,7 +1490,7 @@ module core_top (
 		.wait_count_clk_en                  (cpu_ce_negedge),
 		.ram_read_wait_cycle                (ram_read_wait_cycle),
 		.ram_write_wait_cycle               (ram_write_wait_cycle),
-		.pause_core                         (pause_core),
+		.pause_core                         (pause_core_chipset),
 		.cga_hw                             (cga_hw),
 		.cga_scandouble_en                  (cga_scandouble_en),
 		.hercules_hw                        (hercules_hw_sel),
@@ -1708,9 +1725,8 @@ module core_top (
 
     // Monochrome-monitor palette (Display setting). palette_cfg 0 = full colour; 1-7
     // tint the pixel by its weighted luma (green/amber/B&W/red/blue/fuchsia/purple).
-    // Combinational, mirroring video/video_monochrome_converter.sv's math, so the lean
-    // clk_pix output needs no extra pixel clock/enable and adds no latency. r/g/b are
-    // 6-bit; widen to 8 to match the converter's weights.
+    // Combinational, so the lean clk_pix output needs no extra pixel clock/enable and
+    // adds no latency. r/g/b are 6-bit; widen to 8 for the luma weights.
     wire [7:0]  pr = {r, 2'b00};
     wire [7:0]  pg = {g, 2'b00};
     wire [7:0]  pb = {b, 2'b00};
@@ -1731,17 +1747,59 @@ module core_top (
         endcase
     end
 
+    wire        credits_hb, credits_vb;
+    wire [23:0] credits_rgb;
+    wire        credits_rst;
+    synch_3 s_credits_rst (RESET, credits_rst, clk_pix);
+
+    jtframe_credits #(
+        .PAGES  (4),
+        .COLW   (8),
+        .BLKPOL (1)
+    ) u_credits(
+        .rst        ( credits_rst ),
+        .clk        ( clk_pix ),
+        .pxl_cen    ( 1'b1 ),
+
+        // input image
+        .HB         ( HBlank  ),
+        .VB         ( VBlank ),
+        .rgb_in     ( credits_mode_pix ? 24'd0 : {tr, tg, tb} ),
+        .rotate     ( 2'd0  ),
+        .toggle     ( 1'b0  ),
+        .fast_scroll( 1'b0  ),
+        .border     ( 1'b0 ),
+
+        .vram_din   ( 8'h0  ),
+        .vram_dout  (       ),
+        .vram_addr  ( 8'h0  ),
+        .vram_we    ( 1'b0  ),
+        .vram_ctrl  ( 3'b0  ),
+        .enable     ( credits_mode_pix ),
+
+        // output image
+        .HB_out     ( credits_hb      ),
+        .VB_out     ( credits_vb      ),
+        .rgb_out    ( credits_rgb )
+    );
+
     reg  [23:0] vid_rgb = 24'd0;
     reg         vid_de  = 1'b0;
     reg         vid_hs  = 1'b0;
     reg         vid_vs  = 1'b0;
+    reg         hs_d    = 1'b0;
+    reg         vs_d    = 1'b0;
 
+    // The credits overlay registers HB/VB/RGB by one clk_pix; stage HSync/VSync once
+    // (hs_d/vs_d) so sync stays aligned with the overlaid pixels.
     always @(posedge clk_pix)
     begin
-        vid_de  <= ~(HBlank | VBlank);
-        vid_rgb <= ~(HBlank | VBlank) ? {tr, tg, tb} : 24'd0;
-        vid_hs  <= HSync;
-        vid_vs  <= VSync;
+        hs_d    <= HSync;
+        vs_d    <= VSync;
+        vid_de  <= ~(credits_hb | credits_vb);
+        vid_rgb <= ~(credits_hb | credits_vb) ? credits_rgb : 24'd0;
+        vid_hs  <= hs_d;
+        vid_vs  <= vs_d;
     end
 
     assign video_rgb          = vid_rgb;

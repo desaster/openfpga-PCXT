@@ -787,6 +787,7 @@ set_global_assignment -name VERILOG_FILE core/pll_video.v
 # their directories go on the search path.
 set_global_assignment -name SEARCH_PATH core/8088
 set_global_assignment -name SEARCH_PATH core/video
+set_global_assignment -name SEARCH_PATH core/common
 set_global_assignment -name QIP_FILE core/common/common.qip
 set_global_assignment -name QIP_FILE core/video/video.qip
 set_global_assignment -name QIP_FILE core/uart/uart.qip
