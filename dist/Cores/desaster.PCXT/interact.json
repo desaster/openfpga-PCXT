@@ -62,6 +62,36 @@
           { "value": 6, "name": "Fuchsia" },
           { "value": 7, "name": "Purple" }
         ]
+      },
+      {
+        "name": "OPL2 Audio",
+        "id": 5,
+        "type": "list",
+        "enabled": true,
+        "persist": true,
+        "writeonly": true,
+        "address": "0x70",
+        "defaultval": 0,
+        "options": [
+          { "value": 0, "name": "Adlib 388h" },
+          { "value": 1, "name": "SB FM 388h/228h" },
+          { "value": 2, "name": "Disabled" }
+        ]
+      },
+      {
+        "name": "Audio Boost",
+        "id": 6,
+        "type": "list",
+        "enabled": true,
+        "persist": true,
+        "writeonly": true,
+        "address": "0x74",
+        "defaultval": 0,
+        "options": [
+          { "value": 0, "name": "None" },
+          { "value": 1, "name": "2x" },
+          { "value": 2, "name": "4x" }
+        ]
       }
     ]
   }

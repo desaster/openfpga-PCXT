@@ -460,6 +460,8 @@ module core_top (
     reg  [1:0] cpu_speed_cfg_74a = 2'd0;   // 0=4.77 1=7.16 2=9.54 3=PC/AT 3.5 MHz
     reg  [2:0] palette_cfg_74a   = 3'd0;   // display palette (0=full colour, 1-7 mono tints)
     reg  [1:0] wp_cfg_74a        = 2'd0;   // floppy write-protect {B:, A:}
+    reg  [1:0] opl2_cfg_74a      = 2'd0;   // OPL2 port: 0=Adlib 388h, 1=SB FM 228h, 2=off
+    reg  [1:0] boost_cfg_74a     = 2'd0;   // audio boost: 0=none, 1=2x, 2=4x (compressor)
     always @(posedge clk_74a) begin
         if (interact_reset_delay != 20'd0)
             interact_reset_delay <= interact_reset_delay - 20'd1;
@@ -469,17 +471,23 @@ module core_top (
                 32'h0000_0060: cpu_speed_cfg_74a <= bridge_wr_data[1:0];
                 32'h0000_0064: palette_cfg_74a   <= bridge_wr_data[2:0];
                 32'h0000_006C: wp_cfg_74a        <= bridge_wr_data[1:0];
+                32'h0000_0070: opl2_cfg_74a      <= bridge_wr_data[1:0];
+                32'h0000_0074: boost_cfg_74a     <= bridge_wr_data[1:0];
             endcase
         end
     end
     wire       interact_reset;
     wire [1:0] cpu_speed_cfg;
     wire [1:0] wp_cfg;
+    wire [1:0] opl2_cfg;
+    wire [1:0] boost_cfg;
     // palette_cfg is synced into the clk_pix video domain (used by the output tint).
     wire [2:0] palette_cfg;
     synch_3              s_interact_reset (|interact_reset_delay, interact_reset, clk_chipset);
     synch_3 #(.WIDTH(2)) s_cpu_speed_cfg  (cpu_speed_cfg_74a, cpu_speed_cfg, clk_chipset);
     synch_3 #(.WIDTH(2)) s_wp_cfg         (wp_cfg_74a,        wp_cfg,        clk_chipset);
+    synch_3 #(.WIDTH(2)) s_opl2_cfg       (opl2_cfg_74a,      opl2_cfg,      clk_chipset);
+    synch_3 #(.WIDTH(2)) s_boost_cfg      (boost_cfg_74a,     boost_cfg,     clk_chipset);
     synch_3 #(.WIDTH(3)) s_palette_cfg    (palette_cfg_74a,   palette_cfg,   clk_pix);
 
     wire reset_wire = RESET | status[0] | load_active | ~bios_ever_loaded | interact_reset;
@@ -1412,7 +1420,7 @@ module core_top (
 		.joya1                              (status[28] ? joya0 : joya1),
 		.jtopl2_snd_e                       (jtopl2_snd_e),
 		.tandy_snd_e                        (tandy_snd_e),
-		.opl2_io                            (xtctl[4] ? 2'b10 : status[43:42]),
+		.opl2_io                            (xtctl[4] ? 2'b10 : opl2_cfg),
 		.cms_en                             (~status[10]),
 		.o_cms_l                            (cms_l_snd_e),
 		.o_cms_r                            (cms_r_snd_e),
@@ -1573,7 +1581,7 @@ module core_top (
             v  = inp[15] ? (~inp) + 1'd1 : inp;
             v1 = (v < comp_x1[15:0]) ? (v * comp_a1) : (((v - comp_x1[15:0])/comp_f1) + comp_b1[15:0]);
             v2 = (v < comp_x2[15:0]) ? (v * comp_a2) : (((v - comp_x2[15:0])/comp_f2) + comp_b2[15:0]);
-            v  = status[37] ? v2 : v1;
+            v  = boost_cfg[1] ? v2 : v1;
             compr = inp[15] ? ~(v-1'd1) : v;
         end
     endfunction
@@ -1608,8 +1616,8 @@ module core_top (
 
     // ---- Audio: 16-bit signed mix -> I2S (Pocket audio codec) ----
     // (the MiSTer AUDIO_MIX stereo-blend is dropped; not reimplemented here.)
-    wire [15:0] audio_l = pause_core ? 16'd0 : (status[37:36] ? cmp_l : out_l);
-    wire [15:0] audio_r = pause_core ? 16'd0 : (status[37:36] ? cmp_r : out_r);
+    wire [15:0] audio_l = pause_core ? 16'd0 : (boost_cfg ? cmp_l : out_l);
+    wire [15:0] audio_r = pause_core ? 16'd0 : (boost_cfg ? cmp_r : out_r);
 
     sound_i2s #(.CHANNEL_WIDTH(16), .SIGNED_INPUT(1)) sound_i2s (
         .clk_74a    (clk_74a),
