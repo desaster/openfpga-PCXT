@@ -77,22 +77,25 @@ module pocket_keyboard (
     );
 
     //
-    // Source A: controller buttons. Synchronise cont1_key, then scan the 8 mapped
-    // bits one per clock: [0]=up [1]=down [2]=left [3]=right [4]=A [5]=B [6]=X [7]=Y.
-    // D-pad is fixed to the XT keypad arrows; A/B/X/Y take their Set-2 code from the
-    // interact-menu config (cfg_*, 0 = unmapped), selected by the current scan index.
+    // Source A: controller buttons. Synchronise cont1_key, then scan the mapped bits
+    // one per clock: [0]=up [1]=down [2]=left [3]=right [4]=A [5]=B [6]=X [7]=Y,
+    // [8]=Select [9]=Start. D-pad is fixed to the XT keypad arrows; A/B/X/Y take their
+    // Set-2 code from the interact-menu config (cfg_*, 0 = unmapped); Select/Start are
+    // fixed to Tab/Enter. Selected by the current scan index.
     //
-    reg [7:0] btn_s0, btn_s, btn_prev;
-    reg [2:0] btn_idx;
+    reg [9:0] btn_s0, btn_s, btn_prev;
+    reg [3:0] btn_idx;
 
-    wire [7:0] cur_code = (btn_idx == 3'd0) ? 8'h75 :  // up    -> keypad 8
-                          (btn_idx == 3'd1) ? 8'h72 :  // down  -> keypad 2
-                          (btn_idx == 3'd2) ? 8'h6B :  // left  -> keypad 4
-                          (btn_idx == 3'd3) ? 8'h74 :  // right -> keypad 6
-                          (btn_idx == 3'd4) ? cfg_a  :
-                          (btn_idx == 3'd5) ? cfg_b  :
-                          (btn_idx == 3'd6) ? cfg_x  :
-                                              cfg_y;
+    wire [7:0] cur_code = (btn_idx == 4'd0) ? 8'h75 :  // up     -> keypad 8
+                          (btn_idx == 4'd1) ? 8'h72 :  // down   -> keypad 2
+                          (btn_idx == 4'd2) ? 8'h6B :  // left   -> keypad 4
+                          (btn_idx == 4'd3) ? 8'h74 :  // right  -> keypad 6
+                          (btn_idx == 4'd4) ? cfg_a  :
+                          (btn_idx == 4'd5) ? cfg_b  :
+                          (btn_idx == 4'd6) ? cfg_x  :
+                          (btn_idx == 4'd7) ? cfg_y  :
+                          (btn_idx == 4'd8) ? 8'h0D :  // Select -> Tab
+                                              8'h5A;   // Start  -> Enter
 
     //
     // Source B: docked USB keyboard. Synchronise cont3_* into the clk domain and
@@ -136,10 +139,11 @@ module pocket_keyboard (
 
     always @(posedge clk) begin
         if (reset) begin
-            btn_s0 <= 8'd0; btn_s <= 8'd0; btn_prev <= 8'd0; btn_idx <= 3'd0;
+            btn_s0 <= 10'd0; btn_s <= 10'd0; btn_prev <= 10'd0; btn_idx <= 4'd0;
             usb_stb_d <= 1'b0; q_wr <= {QW{1'b0}};
         end else begin
-            btn_s0 <= gamepad ? 8'd0 : buttons[7:0];   // joystick mode: no key events
+            // Start/Select stay live in joystick mode; D-pad + A/B/X/Y are gated off.
+            btn_s0 <= {buttons[15], buttons[14], gamepad ? 8'd0 : buttons[7:0]};
             btn_s  <= btn_s0;
 
             if (!q_full) begin
@@ -154,7 +158,7 @@ module pocket_keyboard (
                     q_wr        <= q_wr + 1'b1;
                     usb_stb_d   <= usb_key[10];
                 end else begin
-                    btn_idx <= btn_idx + 3'd1;   // no event: advance scan (wraps 0..7)
+                    btn_idx <= (btn_idx == 4'd9) ? 4'd0 : btn_idx + 4'd1;   // advance scan 0..9
                 end
             end
         end
