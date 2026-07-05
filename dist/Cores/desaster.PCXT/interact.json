@@ -3,13 +3,45 @@
     "magic": "APF_VER_1",
     "variables": [
       {
-        "name": "Reset PC",
+        "name": "Reset & Apply",
         "id": 1,
         "type": "action",
         "enabled": true,
         "writeonly": true,
         "address": "0x50",
         "value": 1
+      },
+      {
+        "name": "CPU Speed",
+        "id": 2,
+        "type": "list",
+        "enabled": true,
+        "persist": true,
+        "writeonly": true,
+        "address": "0x60",
+        "defaultval": 0,
+        "options": [
+          { "value": 0, "name": "4.77 MHz" },
+          { "value": 1, "name": "7.16 MHz" },
+          { "value": 2, "name": "9.54 MHz" },
+          { "value": 3, "name": "PC/AT 3.5 MHz" }
+        ]
+      },
+      {
+        "name": "Write Protect",
+        "id": 3,
+        "type": "list",
+        "enabled": true,
+        "persist": true,
+        "writeonly": true,
+        "address": "0x6C",
+        "defaultval": 0,
+        "options": [
+          { "value": 0, "name": "None" },
+          { "value": 1, "name": "A:" },
+          { "value": 2, "name": "B:" },
+          { "value": 3, "name": "A: & B:" }
+        ]
       }
     ]
   }

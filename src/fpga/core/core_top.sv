@@ -296,8 +296,10 @@ module core_top (
 
     wire forced_scandoubler;
     wire [1:0] buttons;
-    // Config register: was the HPS OSD status; now constant Pocket defaults.
-    // bit 7 = splash off; all-zero gives CGA on, EMS on, A000 UMB on, BIOS
+    // Config register: was the HPS OSD status; now constant Pocket defaults, except
+    // the bits driven by the interact settings menu (CPU speed [18:17], floppy
+    // write-protect [20:19]) via the *_cfg registers below, which supersede the
+    // constant for those bits. All-zero gives CGA on, EMS on, A000 UMB on, BIOS
     // write-protected, 4.77 MHz, no border, full-colour, no audio mix.
     // NB: CGA/EMS/A000 UMB/OPL2 being "on" is contingent on the ENABLE_* macros in
     // ap_core.qsf; the `ifndef fallbacks at the top of this file default them off.
@@ -452,14 +454,28 @@ module core_top (
     // it to the chipset clock, and fold it into the guest reset so the machine
     // re-POSTs and the disk softcore re-mounts the current floppy images.
     reg [19:0] interact_reset_delay = 20'd0;
+    // Interact-menu settings (interact.json list variables), each latched write-only
+    // from its own bridge address, then synch_3'd into the core clock. They supersede
+    // the matching bits of the constant `status` above.
+    reg  [1:0] cpu_speed_cfg_74a = 2'd0;   // 0=4.77 1=7.16 2=9.54 3=PC/AT 3.5 MHz
+    reg  [1:0] wp_cfg_74a        = 2'd0;   // floppy write-protect {B:, A:}
     always @(posedge clk_74a) begin
         if (interact_reset_delay != 20'd0)
             interact_reset_delay <= interact_reset_delay - 20'd1;
-        if (bridge_wr && bridge_addr == 32'h0000_0050)
-            interact_reset_delay <= 20'hFFFFF;
+        if (bridge_wr) begin
+            case (bridge_addr)
+                32'h0000_0050: interact_reset_delay <= 20'hFFFFF;  // Reset & Apply
+                32'h0000_0060: cpu_speed_cfg_74a <= bridge_wr_data[1:0];
+                32'h0000_006C: wp_cfg_74a        <= bridge_wr_data[1:0];
+            endcase
+        end
     end
-    wire interact_reset;
-    synch_3 s_interact_reset (|interact_reset_delay, interact_reset, clk_chipset);
+    wire       interact_reset;
+    wire [1:0] cpu_speed_cfg;
+    wire [1:0] wp_cfg;
+    synch_3              s_interact_reset (|interact_reset_delay, interact_reset, clk_chipset);
+    synch_3 #(.WIDTH(2)) s_cpu_speed_cfg  (cpu_speed_cfg_74a, cpu_speed_cfg, clk_chipset);
+    synch_3 #(.WIDTH(2)) s_wp_cfg         (wp_cfg_74a,        wp_cfg,        clk_chipset);
 
     wire reset_wire = RESET | status[0] | load_active | ~bios_ever_loaded | interact_reset;
     wire video_retime_reset = RESET;
@@ -696,7 +712,7 @@ module core_top (
     logic  [1:0] ram_write_wait_cycle;
     logic        cycle_accrate;
     logic  [1:0] clk_select;
-    wire   [1:0] clk_select_next = ((xtctl[3:2] == 2'b00) && ~xtctl[7]) ? status[18:17] :
+    wire   [1:0] clk_select_next = ((xtctl[3:2] == 2'b00) && ~xtctl[7]) ? cpu_speed_cfg :
                                    (xtctl[7] ? 2'b11 : xtctl[3:2] - 2'b01);
 
     always @(posedge clk_chipset, posedge reset)
@@ -1435,7 +1451,7 @@ module core_top (
 		.mgmt_address                       (mgmt_addr),
 		.mgmt_write                         (mgmt_wr),
 		.mgmt_read                          (mgmt_rd),
-		.floppy_wp                          (status[20:19]),
+		.floppy_wp                          (wp_cfg),
 		.fdd_present                        (fdd_present),
 		.fdd_request                        (mgmt_req[7:6]),
 		.ide0_request                       (mgmt_req[2:0]),
