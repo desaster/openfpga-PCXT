@@ -6,6 +6,9 @@
 // {strobe, pressed, 1'b0, code[7:0]}. The HID-usage -> Set-2 mapping follows the
 // public USB HID Keyboard and PS/2 Set-2 specifications.
 //
+// Within one report, modifier makes are emitted before key makes and key breaks
+// before modifier breaks, so a chord holds its modifier around the key.
+//
 
 module hid_to_ps2
 (
@@ -157,12 +160,14 @@ wire [7:0] ps2_mod  = mod2ps2(slot);
 
 wire is_new_press   = (curr_at != 0) && (ps2_curr != 0) && !code_in(curr_at, scan_prev);
 wire is_new_release = (prev_at != 0) && (ps2_prev != 0) && !code_in(prev_at, scan_curr);
-wire is_mod_change  = (scan_mcurr[slot] != scan_mprev[slot]) && (ps2_mod != 0);
+wire is_mod_press   = scan_mcurr[slot] && !scan_mprev[slot] && (ps2_mod != 0);
+wire is_mod_release = !scan_mcurr[slot] && scan_mprev[slot] && (ps2_mod != 0);
 
-localparam S_IDLE    = 3'd0,
-           S_PRESS   = 3'd1,
-           S_RELEASE = 3'd2,
-           S_MODS    = 3'd3;
+localparam S_IDLE     = 3'd0,
+           S_MPRESS   = 3'd1,
+           S_PRESS    = 3'd2,
+           S_RELEASE  = 3'd3,
+           S_MRELEASE = 3'd4;
 
 reg [2:0] state;
 reg [2:0] slot;
@@ -185,9 +190,19 @@ always @(posedge clk) begin
 				scan_mprev <= prev_mods;
 				prev_raw   <= curr_raw;
 				prev_mods  <= mods;
-				state      <= S_PRESS;
+				state      <= S_MPRESS;
 				slot       <= 0;
 			end
+		end
+
+		S_MPRESS: begin
+			if (is_mod_press)
+				ps2_key <= {~ps2_key[10], 1'b1, 1'b0, ps2_mod};
+			if (slot == 3'd7) begin
+				state <= S_PRESS;
+				slot  <= 0;
+			end else
+				slot <= slot + 1'd1;
 		end
 
 		S_PRESS: begin
@@ -204,15 +219,15 @@ always @(posedge clk) begin
 			if (is_new_release)
 				ps2_key <= {~ps2_key[10], 1'b0, 1'b0, ps2_prev};
 			if (slot == 3'd5) begin
-				state <= S_MODS;
+				state <= S_MRELEASE;
 				slot  <= 0;
 			end else
 				slot <= slot + 1'd1;
 		end
 
-		S_MODS: begin
-			if (is_mod_change)
-				ps2_key <= {~ps2_key[10], scan_mcurr[slot], 1'b0, ps2_mod};
+		S_MRELEASE: begin
+			if (is_mod_release)
+				ps2_key <= {~ps2_key[10], 1'b0, 1'b0, ps2_mod};
 			if (slot == 3'd7)
 				state <= S_IDLE;
 			else
