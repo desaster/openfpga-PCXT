@@ -42,6 +42,26 @@
           { "value": 2, "name": "B:" },
           { "value": 3, "name": "A: & B:" }
         ]
+      },
+      {
+        "name": "Display",
+        "id": 4,
+        "type": "list",
+        "enabled": true,
+        "persist": true,
+        "writeonly": true,
+        "address": "0x64",
+        "defaultval": 0,
+        "options": [
+          { "value": 0, "name": "Full Color" },
+          { "value": 1, "name": "Green" },
+          { "value": 2, "name": "Amber" },
+          { "value": 3, "name": "B&W" },
+          { "value": 4, "name": "Red" },
+          { "value": 5, "name": "Blue" },
+          { "value": 6, "name": "Fuchsia" },
+          { "value": 7, "name": "Purple" }
+        ]
       }
     ]
   }

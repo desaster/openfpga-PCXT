@@ -458,6 +458,7 @@ module core_top (
     // from its own bridge address, then synch_3'd into the core clock. They supersede
     // the matching bits of the constant `status` above.
     reg  [1:0] cpu_speed_cfg_74a = 2'd0;   // 0=4.77 1=7.16 2=9.54 3=PC/AT 3.5 MHz
+    reg  [2:0] palette_cfg_74a   = 3'd0;   // display palette (0=full colour, 1-7 mono tints)
     reg  [1:0] wp_cfg_74a        = 2'd0;   // floppy write-protect {B:, A:}
     always @(posedge clk_74a) begin
         if (interact_reset_delay != 20'd0)
@@ -466,6 +467,7 @@ module core_top (
             case (bridge_addr)
                 32'h0000_0050: interact_reset_delay <= 20'hFFFFF;  // Reset & Apply
                 32'h0000_0060: cpu_speed_cfg_74a <= bridge_wr_data[1:0];
+                32'h0000_0064: palette_cfg_74a   <= bridge_wr_data[2:0];
                 32'h0000_006C: wp_cfg_74a        <= bridge_wr_data[1:0];
             endcase
         end
@@ -473,9 +475,12 @@ module core_top (
     wire       interact_reset;
     wire [1:0] cpu_speed_cfg;
     wire [1:0] wp_cfg;
+    // palette_cfg is synced into the clk_pix video domain (used by the output tint).
+    wire [2:0] palette_cfg;
     synch_3              s_interact_reset (|interact_reset_delay, interact_reset, clk_chipset);
     synch_3 #(.WIDTH(2)) s_cpu_speed_cfg  (cpu_speed_cfg_74a, cpu_speed_cfg, clk_chipset);
     synch_3 #(.WIDTH(2)) s_wp_cfg         (wp_cfg_74a,        wp_cfg,        clk_chipset);
+    synch_3 #(.WIDTH(3)) s_palette_cfg    (palette_cfg_74a,   palette_cfg,   clk_pix);
 
     wire reset_wire = RESET | status[0] | load_active | ~bios_ever_loaded | interact_reset;
     wire video_retime_reset = RESET;
@@ -1693,6 +1698,31 @@ module core_top (
     wire [5:0]  r, g, b;
     wire        tandy_16_gfx, tandy_color_16;   // CHIPSET Tandy-video outputs (unused)
 
+    // Monochrome-monitor palette (Display setting). palette_cfg 0 = full colour; 1-7
+    // tint the pixel by its weighted luma (green/amber/B&W/red/blue/fuchsia/purple).
+    // Combinational, mirroring video/video_monochrome_converter.sv's math, so the lean
+    // clk_pix output needs no extra pixel clock/enable and adds no latency. r/g/b are
+    // 6-bit; widen to 8 to match the converter's weights.
+    wire [7:0]  pr = {r, 2'b00};
+    wire [7:0]  pg = {g, 2'b00};
+    wire [7:0]  pb = {b, 2'b00};
+    wire [15:0] luma16 = pr * 16'd54 + pg * 16'd183 + pb * 16'd18;  // Rec.709 weights <<8
+    wire [7:0]  mono   = luma16[15:8];
+    wire [7:0]  hmono  = {1'b0, luma16[15:9]};   // mono >> 1
+    reg  [7:0]  tr, tg, tb;
+    always @(*) begin
+        case (palette_cfg)
+            3'd1: begin tr = 8'h00;                         tg = (mono < 8'h0F) ? 8'h0F : mono; tb = 8'h01; end
+            3'd2: begin tr = (mono < 8'h08) ? 8'h08 : mono; tg = hmono;                         tb = 8'h01; end
+            3'd3: begin tr = mono;                          tg = mono;                          tb = mono;  end
+            3'd4: begin tr = (mono < 8'h08) ? 8'h08 : mono; tg = 8'h00;                         tb = 8'h01; end
+            3'd5: begin tr = 8'h00;                         tg = hmono;                         tb = (mono < 8'h08) ? 8'h08 : mono; end
+            3'd6: begin tr = (mono < 8'h08) ? 8'h08 : mono; tg = 8'h00;                         tb = hmono; end
+            3'd7: begin tr = hmono;                         tg = 8'h00;                         tb = (mono < 8'h08) ? 8'h08 : mono; end
+            default: begin tr = pr; tg = pg; tb = pb; end   // full colour
+        endcase
+    end
+
     reg  [23:0] vid_rgb = 24'd0;
     reg         vid_de  = 1'b0;
     reg         vid_hs  = 1'b0;
@@ -1701,7 +1731,7 @@ module core_top (
     always @(posedge clk_pix)
     begin
         vid_de  <= ~(HBlank | VBlank);
-        vid_rgb <= ~(HBlank | VBlank) ? {r, 2'b00, g, 2'b00, b, 2'b00} : 24'd0;
+        vid_rgb <= ~(HBlank | VBlank) ? {tr, tg, tb} : 24'd0;
         vid_hs  <= HSync;
         vid_vs  <= VSync;
     end
