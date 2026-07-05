@@ -330,7 +330,17 @@ module core_top (
 
     wire [13:0] joy0, joy1;
     wire [15:0] joya0, joya1;
-    wire [4:0]  joy_opts = status[27:23];
+
+    // Controller-button config (interact menu), latched in clk_74a and synced into
+    // clk_chipset below. key_* = per-face-button Set-2 scancode; gamepad selects the
+    // game port over the keyboard.
+    wire [7:0]  key_a, key_b, key_x, key_y;
+    wire        gamepad;
+    wire [15:0] cont1_key_chip;
+
+    // Game port P1: digital directions from the D-pad in joystick mode, else idle.
+    // joy_opts [4]=turbo-track CPU speed [3]=P2 off [1]=P1 off [0]=P1 digital.
+    wire [4:0]  joy_opts = gamepad ? 5'b11001 : 5'b11011;
 
     wire composite = status[40] | xtctl[0];
     wire [1:0] scale = status[2:1];
@@ -377,7 +387,10 @@ module core_top (
     // it sources ps2_kbd_clk_in / ps2_kbd_data_in. Mouse/joystick idle for now.
     assign ps2_mouse_clk_out  = 1'b1;   // CHIPSET mouse input, idle
     assign ps2_mouse_data_out = 1'b1;
-    assign joy0  = 14'd0;
+    // joy0 bits: [5]=fire2 [4]=fire1 [3]=up [2]=down [1]=left [0]=right.
+    assign joy0  = gamepad ? {8'd0, cont1_key_chip[5], cont1_key_chip[4],
+                                    cont1_key_chip[0], cont1_key_chip[1],
+                                    cont1_key_chip[2], cont1_key_chip[3]} : 14'd0;
     assign joy1  = 14'd0;
     assign joya0 = 16'd0;
     assign joya1 = 16'd0;
@@ -462,6 +475,11 @@ module core_top (
     reg  [1:0] opl2_cfg_74a      = 2'd0;   // OPL2 port: 0=Adlib 388h, 1=SB FM 228h, 2=off
     reg  [1:0] boost_cfg_74a     = 2'd0;   // audio boost: 0=none, 1=2x, 2=4x (compressor)
     reg        splash_cfg_74a    = 1'b1;   // boot splash enable (default on)
+    reg  [7:0] key_a_74a         = 8'h14;  // A default: L-Ctrl (Set-2 scancode)
+    reg  [7:0] key_b_74a         = 8'h11;  // B default: L-Alt
+    reg  [7:0] key_x_74a         = 8'h29;  // X default: Space
+    reg  [7:0] key_y_74a         = 8'h5A;  // Y default: Enter
+    reg        gamepad_74a       = 1'b0;   // 0 = keyboard, 1 = joystick (game port)
     reg        credits_active_74a = 1'b0;  // credits showing: set by the menu action, cleared by any button
     wire       any_btn_74a;                // any Pocket controller-1 button, synced to this domain
     synch_3 s_anybtn (|cont1_key, any_btn_74a, clk_74a);
@@ -477,6 +495,11 @@ module core_top (
                 32'h0000_0070: opl2_cfg_74a      <= bridge_wr_data[1:0];
                 32'h0000_0068: splash_cfg_74a    <= bridge_wr_data[0];
                 32'h0000_0074: boost_cfg_74a     <= bridge_wr_data[1:0];
+                32'h0000_0080: key_a_74a         <= bridge_wr_data[7:0];
+                32'h0000_0084: key_b_74a         <= bridge_wr_data[7:0];
+                32'h0000_0088: key_x_74a         <= bridge_wr_data[7:0];
+                32'h0000_008C: key_y_74a         <= bridge_wr_data[7:0];
+                32'h0000_0090: gamepad_74a       <= bridge_wr_data[0];
                 32'h0000_0078: credits_active_74a <= 1'b1;         // Show Credits (start)
             endcase
         end
@@ -497,6 +520,12 @@ module core_top (
     synch_3 #(.WIDTH(2)) s_wp_cfg         (wp_cfg_74a,        wp_cfg,        clk_chipset);
     synch_3 #(.WIDTH(2)) s_opl2_cfg       (opl2_cfg_74a,      opl2_cfg,      clk_chipset);
     synch_3 #(.WIDTH(2)) s_boost_cfg      (boost_cfg_74a,     boost_cfg,     clk_chipset);
+    synch_3 #(.WIDTH(8)) s_key_a          (key_a_74a,         key_a,         clk_chipset);
+    synch_3 #(.WIDTH(8)) s_key_b          (key_b_74a,         key_b,         clk_chipset);
+    synch_3 #(.WIDTH(8)) s_key_x          (key_x_74a,         key_x,         clk_chipset);
+    synch_3 #(.WIDTH(8)) s_key_y          (key_y_74a,         key_y,         clk_chipset);
+    synch_3               s_gamepad       (gamepad_74a,       gamepad,       clk_chipset);
+    synch_3 #(.WIDTH(16)) s_cont1_chip    (cont1_key,         cont1_key_chip, clk_chipset);
     synch_3 #(.WIDTH(3)) s_palette_cfg    (palette_cfg_74a,   palette_cfg,   clk_pix);
     wire credits_mode_pix;
     wire credits_mode_chip;
@@ -1346,6 +1375,11 @@ module core_top (
         .clk          (clk_chipset),
         .reset        (reset),
         .buttons      (cont1_key),
+        .gamepad      (gamepad),
+        .cfg_a        (key_a),
+        .cfg_b        (key_b),
+        .cfg_x        (key_x),
+        .cfg_y        (key_y),
         .cont3_joy    (cont3_joy),
         .cont3_trig   (cont3_trig),
         .cont3_key    (cont3_key),
