@@ -8,20 +8,12 @@
 // controller has queued in that FIFO into the bridge RAM, then persist them to the
 // dataslot. Each pass moves one sector and runs again while the request holds.
 //
-// Written sectors reach the SD file through target-dataslot writes; a data-slot
-// flush forces them out to the card once the drive goes idle, so an edit survives
-// a power-off that skips a clean exit.
+// Written sectors reach the SD file through target-dataslot writes.
 //
 // The geometry table and the register protocol follow MiSTer's x86 support
 // (Main_MiSTer support/x86/x86.cpp), retargeted from the HPS to this softcore.
 
 #include "softcpu_regs.h"
-
-// Idle fdd_poll passes (no request pending) to wait after a write before flushing
-// the dataslot to SD. Long enough to span the gap between the sectors of one write
-// so a burst flushes once, short enough that an edit reaches the card promptly.
-// Starting point; tune on hardware.
-#define FDD_FLUSH_IDLE_POLLS 100000u
 
 // One management-bus write: latch drive + register + 16-bit data, then trigger.
 static void mgmt_write(uint32_t drive, uint32_t reg, uint32_t data)
@@ -102,17 +94,6 @@ static void write_sector(uint32_t slot_id, uint32_t lba)
     }
 }
 
-// Force the dataslot's written sectors out to the SD card (APF 0x0188 flush). Only
-// the slot id matters for this command.
-static void flush_slot(uint32_t slot_id)
-{
-    *FDD_TDS_ID = slot_id;
-    *FDD_TDS_CLR = 1;
-    *FDD_TDS_TRIG = FDD_TDS_FLUSH;
-    while (!(*FDD_TDS_STATUS & FDD_TDS_DONE)) {
-    }
-}
-
 // Standard PC floppy geometries, largest first; the first whose sector count the
 // image meets wins. Matches the size thresholds MiSTer's x86 support uses.
 struct fdd_geom {
@@ -164,30 +145,19 @@ void fdd_mount(uint32_t sectors)
     mgmt_write(0, FMGMT_PRESENT, 1);
 }
 
-// Answer one pending controller request, or, after the drive has stayed idle since
-// a write, flush the written sectors to SD. A read pulls the sector from the
-// dataslot and streams it to the FIFO; a write drains the FIFO and persists it. The
-// flush is idle-debounced so a multi-sector burst flushes once, not per sector.
+// Answer one pending controller request. A read pulls the sector from the dataslot
+// and streams it to the controller FIFO; a write drains the FIFO and persists it to
+// the dataslot. Writes reach the SD file directly, so nothing else is needed here.
 void fdd_poll(void)
 {
-    static uint32_t dirty = 0;
-    static uint32_t idle = 0;
-
     uint32_t req = *FDD_REQUEST;
     if (req & FDD_REQ_READ) {
         uint32_t lba = mgmt_read(0, FMGMT_PRESENT) & FDD_LBA_MASK;
         pull_sector(FDD0_SLOT_ID, lba);
         push_sector(0);
-        idle = 0;
     } else if (req & FDD_REQ_WRITE) {
         uint32_t lba = mgmt_read(0, FMGMT_PRESENT) & FDD_LBA_MASK;
         pull_fifo(0);
         write_sector(FDD0_SLOT_ID, lba);
-        dirty = 1;
-        idle = 0;
-    } else if (dirty && ++idle >= FDD_FLUSH_IDLE_POLLS) {
-        flush_slot(FDD0_SLOT_ID);
-        dirty = 0;
-        idle = 0;
     }
 }
