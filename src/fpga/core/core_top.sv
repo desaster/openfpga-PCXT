@@ -446,7 +446,22 @@ module core_top (
     wire        is_downloading;      // APF slot load active (clk_chipset)
     wire        load_active;         // is_downloading OR the FIFO still draining
     reg         bios_ever_loaded = 1'b0;
-    wire reset_wire = RESET | status[0] | load_active | ~bios_ever_loaded;
+
+    // Interact-menu "Reset PC" action (interact.json): the Pocket writes 0x50 once
+    // when the user selects it. Stretch that single clk_74a write into a level, sync
+    // it to the chipset clock, and fold it into the guest reset so the machine
+    // re-POSTs and the disk softcore re-mounts the current floppy images.
+    reg [19:0] interact_reset_delay = 20'd0;
+    always @(posedge clk_74a) begin
+        if (interact_reset_delay != 20'd0)
+            interact_reset_delay <= interact_reset_delay - 20'd1;
+        if (bridge_wr && bridge_addr == 32'h0000_0050)
+            interact_reset_delay <= 20'hFFFFF;
+    end
+    wire interact_reset;
+    synch_3 s_interact_reset (|interact_reset_delay, interact_reset, clk_chipset);
+
+    wire reset_wire = RESET | status[0] | load_active | ~bios_ever_loaded | interact_reset;
     wire video_retime_reset = RESET;
     wire reset_sdram_wire = RESET;
 

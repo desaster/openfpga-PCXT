@@ -1,6 +1,16 @@
 {
   "interact": {
     "magic": "APF_VER_1",
-    "variables": []
+    "variables": [
+      {
+        "name": "Reset PC",
+        "id": 1,
+        "type": "action",
+        "enabled": true,
+        "writeonly": true,
+        "address": "0x50",
+        "value": 1
+      }
+    ]
   }
 }
