@@ -342,7 +342,8 @@ module core_top (
     // joy_opts [4]=turbo-track CPU speed [3]=P2 off [1]=P1 off [0]=P1 digital.
     wire [4:0]  joy_opts = gamepad ? 5'b11001 : 5'b11011;
 
-    wire composite = status[40] | xtctl[0];
+    wire composite_cfg;   // CGA composite colour decode (settings bank, 0x7C)
+    wire composite = composite_cfg | xtctl[0];
     wire [1:0] scale = status[2:1];
     wire [2:0] screen_mode = status[16:14];
     wire [1:0] ar = status[9:8];
@@ -471,6 +472,7 @@ module core_top (
     // the matching bits of the constant `status` above.
     reg  [1:0] cpu_speed_cfg_74a = 2'd0;   // 0=4.77 1=7.16 2=9.54 3=PC/AT 3.5 MHz
     reg  [2:0] palette_cfg_74a   = 3'd0;   // display palette (0=full colour, 1-7 mono tints)
+    reg        composite_cfg_74a = 1'b0;   // CGA composite colour decode (0 = RGBI)
     reg  [1:0] wp_cfg_74a        = 2'd0;   // floppy write-protect {B:, A:}
     reg  [1:0] opl2_cfg_74a      = 2'd0;   // OPL2 port: 0=Adlib 388h, 1=SB FM 228h, 2=off
     reg  [1:0] boost_cfg_74a     = 2'd0;   // audio boost: 0=none, 1=2x, 2=4x (compressor)
@@ -491,6 +493,7 @@ module core_top (
                 32'h0000_0050: interact_reset_delay <= 20'hFFFFF;  // Reset & Apply
                 32'h0000_0060: cpu_speed_cfg_74a <= bridge_wr_data[1:0];
                 32'h0000_0064: palette_cfg_74a   <= bridge_wr_data[2:0];
+                32'h0000_007C: composite_cfg_74a <= bridge_wr_data[0];
                 32'h0000_006C: wp_cfg_74a        <= bridge_wr_data[1:0];
                 32'h0000_0070: opl2_cfg_74a      <= bridge_wr_data[1:0];
                 32'h0000_0068: splash_cfg_74a    <= bridge_wr_data[0];
@@ -520,6 +523,7 @@ module core_top (
     synch_3 #(.WIDTH(2)) s_wp_cfg         (wp_cfg_74a,        wp_cfg,        clk_chipset);
     synch_3 #(.WIDTH(2)) s_opl2_cfg       (opl2_cfg_74a,      opl2_cfg,      clk_chipset);
     synch_3 #(.WIDTH(2)) s_boost_cfg      (boost_cfg_74a,     boost_cfg,     clk_chipset);
+    synch_3              s_composite_cfg  (composite_cfg_74a, composite_cfg, clk_chipset);
     synch_3 #(.WIDTH(8)) s_key_a          (key_a_74a,         key_a,         clk_chipset);
     synch_3 #(.WIDTH(8)) s_key_b          (key_b_74a,         key_b,         clk_chipset);
     synch_3 #(.WIDTH(8)) s_key_x          (key_x_74a,         key_x,         clk_chipset);

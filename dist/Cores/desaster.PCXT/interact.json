@@ -64,6 +64,20 @@
         ]
       },
       {
+        "name": "Composite",
+        "id": 14,
+        "type": "list",
+        "enabled": true,
+        "persist": true,
+        "writeonly": true,
+        "address": "0x7C",
+        "defaultval": 0,
+        "options": [
+          { "value": 0, "name": "Off" },
+          { "value": 1, "name": "On" }
+        ]
+      },
+      {
         "name": "OPL2 Audio",
         "id": 5,
         "type": "list",
