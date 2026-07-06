@@ -13,7 +13,7 @@
         "size_maximum": "0x10000"
       },
       {
-        "name": "Floppy Disk A",
+        "name": "Floppy A",
         "id": 2,
         "required": false,
         "parameters": "0x01",
@@ -22,13 +22,31 @@
         "size_maximum": "0x300000"
       },
       {
-        "name": "Floppy Disk B",
+        "name": "Floppy B",
         "id": 3,
         "required": false,
         "parameters": "0x01",
         "deferload": true,
         "extensions": ["img", "ima", "dsk", "vfd"],
         "size_maximum": "0x300000"
+      },
+      {
+        "name": "IDE 0-0",
+        "id": 4,
+        "required": false,
+        "parameters": "0x01",
+        "deferload": true,
+        "extensions": ["vhd", "img"],
+        "size_maximum": "0x40000000"
+      },
+      {
+        "name": "IDE 0-1",
+        "id": 5,
+        "required": false,
+        "parameters": "0x01",
+        "deferload": true,
+        "extensions": ["vhd", "img"],
+        "size_maximum": "0x40000000"
       }
     ]
   }

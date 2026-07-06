@@ -19,8 +19,11 @@
 #define FDD_TDS_TRIG   ((volatile uint32_t *) 0x30000030) // W: bit0 read, bit1 write, bit2 flush
 #define FDD_TDS_STATUS ((volatile uint32_t *) 0x30000034) // R: bit0 done, bits[3:1] err
 #define FDD_TDS_CLR    ((volatile uint32_t *) 0x30000038) // W: bit0 clear done
-#define FDD_DISK_SIZE  ((volatile uint32_t *) 0x3000003C) // R: drive-A image size in sectors
-#define FDD1_DISK_SIZE ((volatile uint32_t *) 0x30000040) // R: drive-B image size in sectors
+#define FDD0_DISK_SIZE ((volatile uint32_t *) 0x3000003C) // R: floppy-0 image size in sectors
+#define FDD1_DISK_SIZE ((volatile uint32_t *) 0x30000040) // R: floppy-1 image size in sectors
+#define IDE_REQUEST    ((volatile uint32_t *) 0x30000044) // R: ide0 request [2:0]
+#define HDD0_DISK_SIZE ((volatile uint32_t *) 0x30000048) // R: hard-disk-0 image size in sectors
+#define HDD1_DISK_SIZE ((volatile uint32_t *) 0x3000004C) // R: hard-disk-1 image size in sectors
 
 // FDD_REQUEST bits
 #define FDD_REQ_READ  (1 << 0)
@@ -52,18 +55,55 @@
 #define FDD_LBA_MASK  0x7FFF
 #define FDD_LBA_DRIVE 0x8000
 
+// ide.v management registers (mgmt_address[3:0]). IDE_TARGET is a FDD_MGMT_ADDR bit
+// that routes the transaction to ide.v (0xF0) instead of floppy.v (0xF2). The
+// taskfile (regs 0-5) is packed/unpacked in ide_service.c per ide.v's register map;
+// reg 0xF is the 16-bit sector data port (auto-incrementing).
+#define IDE_TARGET    (1 << 8) // FDD_MGMT_ADDR bit: select ide.v
+#define IMGMT_PRESENT 0x6      // drive present / config register
+#define IMGMT_DATA    0xF      // sector data port
+#define IDE_DRV0_WE   (1 << 3) // reg 6: commit drive-0 present/hob bits
+#define IDE_DRV1_WE   (1 << 7) // reg 6: commit drive-1 present/hob bits
+#define IDE_PRESENT   (1 << 0) // reg 6: drive-0 present (drive-1 present is this << 4)
+
+// ATA status byte, placed in the reg-5 high byte and bit-decoded by ide.v. END
+// doubles as last_read (stops re-requesting), RDP as fast_read, IRQ pulses the
+// guest interrupt.
+#define ATA_BSY      0x80
+#define ATA_RDY      0x40
+#define ATA_RDP      0x20
+#define ATA_DSC      0x10
+#define ATA_DRQ      0x08
+#define ATA_IRQ      0x04
+#define ATA_END      0x02
+#define ATA_ERR      0x01
+#define ATA_ERR_ABRT 0x04 // error register: command aborted
+
+// ide0 request encoding (IDE_REQUEST): reset, new command, data phase, idle.
+#define IDE_REQ_RESET 6
+#define IDE_REQ_CMD   4
+#define IDE_REQ_DATA  5
+#define IDE_REQ_IDLE  0
+
 // APF bridge-RAM base and the sector geometry the transfers use.
 #define FDD_BRIDGE_BASE 0x60000000
 #define SECTOR_BYTES    512
 #define SECTOR_WORDS    128
 
-// Dataslot ids of the drive-A and drive-B images. Must match the floppy slots in
+// Dataslot ids of the floppy and hard-disk images. Must match the slots in
 // data.json (and the ids core_top latches the image sizes for).
 #define FDD0_SLOT_ID 2
 #define FDD1_SLOT_ID 3
+#define HDD0_SLOT_ID 4
+#define HDD1_SLOT_ID 5
 
 // Service entry points (fdd_service.c).
 void fdd_mount(uint32_t drive, uint32_t sectors);
 void fdd_poll(void);
+
+// Service entry points (ide_service.c).
+void ide_init(void);
+void ide_mount(uint32_t drive, uint32_t sectors);
+void ide_poll(void);
 
 #endif

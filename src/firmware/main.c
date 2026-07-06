@@ -1,34 +1,58 @@
 // Disk-service firmware entry point.
 //
-// Wait for the host to report a mounted drive-A image and set up its geometry, then
-// service controller requests forever, mounting drive B if and when its (optional,
-// deferred) image appears. The heavy lifting lives in fdd_service.c; this is just
-// the top-level sequence.
+// Mount each disk image the first time the host reports a non-zero size, then service
+// controller requests forever. Every image is optional and may be picked from the
+// menu after boot (deferload), so nothing is waited for up front: a machine can boot
+// from a floppy, from the hard disk, or from either once its image appears. The heavy
+// lifting lives in fdd_service.c and ide_service.c; this is just the top-level loop.
 
 #include "softcpu_regs.h"
 
 int main(void)
 {
-    uint32_t sectors;
-    while ((sectors = *FDD_DISK_SIZE) == 0) {
-    }
+    // Start with both hard disks absent so the BIOS boots from floppy until (and
+    // unless) an image mounts; this also clears a stale-present state after a reset.
+    ide_init();
 
-    fdd_mount(0, sectors);
-
-    // Drive B is optional and its image may be picked from the menu after boot
-    // (deferload), so mount it the first time a non-zero size appears rather than
-    // blocking for it at startup.
+    uint32_t mounted_a = 0;
     uint32_t mounted_b = 0;
+    uint32_t mounted_hdd = 0;
+    uint32_t mounted_hdd_b = 0;
 
     for (;;) {
+        if (!mounted_a) {
+            uint32_t sectors = *FDD0_DISK_SIZE;
+            if (sectors != 0) {
+                fdd_mount(0, sectors);
+                mounted_a = 1;
+            }
+        }
         if (!mounted_b) {
-            uint32_t sectors_b = *FDD1_DISK_SIZE;
-            if (sectors_b != 0) {
-                fdd_mount(1, sectors_b);
+            uint32_t sectors = *FDD1_DISK_SIZE;
+            if (sectors != 0) {
+                fdd_mount(1, sectors);
                 mounted_b = 1;
             }
         }
+        if (!mounted_hdd) {
+            uint32_t sectors = *HDD0_DISK_SIZE;
+            if (sectors != 0) {
+                ide_mount(0, sectors);
+                mounted_hdd = 1;
+            }
+        }
+        if (!mounted_hdd_b) {
+            uint32_t sectors = *HDD1_DISK_SIZE;
+            if (sectors != 0) {
+                ide_mount(1, sectors);
+                mounted_hdd_b = 1;
+            }
+        }
+
         fdd_poll();
+        if (mounted_hdd || mounted_hdd_b) {
+            ide_poll();
+        }
     }
 
     return 0;

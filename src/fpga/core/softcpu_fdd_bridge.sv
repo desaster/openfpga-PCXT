@@ -11,11 +11,12 @@
 //   land it little-endian in the RAM, and the read-back reverses them again so byte
 //   0 leaves in bridge_rd_data_out[31:24].
 //
-//   Controller side: a generic master for floppy.v's management bus. The firmware
-//   composes one mgmt transaction at a time (a floppy register, optional write
+//   Controller side: a generic master for the shared management bus. The firmware
+//   composes one mgmt transaction at a time (a target + register, optional write
 //   data, and a read or write trigger); this drives it as a single clk_sys-cycle
-//   strobe and captures the read data. floppy.v selects on mgmt_address[15:8]==0xF2,
-//   with the drive in bit 7 and the register in bits [3:0].
+//   strobe and captures the read data. CHIPSET routes on mgmt_address[15:8]: 0xF2
+//   selects floppy.v, 0xF0 selects ide.v; the firmware picks the target, with the
+//   drive in bit 7 and the register in bits [3:0].
 //
 // Clock-domain note: clk_pico is a gated clk_sys (its edges are clk_sys edges), so
 // registers the firmware writes are stable across clk_sys and need no synchroniser.
@@ -48,9 +49,14 @@ module softcpu_fdd_bridge #(
     // floppy.v request flags, clk_sys: {write-pending, read-pending}
     input  wire  [1:0] fdd_request,
 
+    // ide.v request, clk_sys: 6=reset, 4=command, 5=data phase, 0=idle
+    input  wire  [2:0] ide0_request,
+
     // Mounted image size in sectors, per drive (from the host dataslot table)
-    input  wire [31:0] disk_size,
-    input  wire [31:0] disk_size_b,
+    input  wire [31:0] fdd0_disk_size,
+    input  wire [31:0] fdd1_disk_size,
+    input  wire [31:0] hdd0_disk_size,
+    input  wire [31:0] hdd1_disk_size,
 
     // Management-bus master to floppy.v via CHIPSET, clk_sys
     output wire [15:0] mgmt_addr,
@@ -139,12 +145,14 @@ module softcpu_fdd_bridge #(
         bridgeram.intended_device_family = "Cyclone V";
 
     //
-    // Management-bus master. The firmware latches a drive + register and optional
-    // write data, then triggers a read or write. mgmt_addr / mgmt_dout come from
-    // those clk_pico registers (stable across the whole period); the trigger pulses
-    // are edge-detected in clk_sys into a single-cycle mgmt_wr / mgmt_rd, and a read
-    // captures mgmt_din the cycle the strobe is asserted.
+    // Management-bus master. The firmware latches a target + drive + register and
+    // optional write data, then triggers a read or write. mgmt_addr / mgmt_dout come
+    // from those clk_pico registers (stable across the whole period); the trigger
+    // pulses are edge-detected in clk_sys into a single-cycle mgmt_wr / mgmt_rd, and
+    // a read captures mgmt_din the cycle the strobe is asserted. mgmt_ide selects the
+    // top address byte, so the same master reaches floppy.v (0xF2) or ide.v (0xF0).
     //
+    reg        mgmt_ide;
     reg        mgmt_drive;
     reg  [3:0] mgmt_reg;
     reg [15:0] mgmt_wdata_r;
@@ -154,7 +162,7 @@ module softcpu_fdd_bridge #(
     reg        mgmt_rd_req_d;
     reg [15:0] mgmt_rdata_cap;
 
-    assign mgmt_addr = {8'hF2, mgmt_drive, 3'b000, mgmt_reg};
+    assign mgmt_addr = {mgmt_ide ? 8'hF0 : 8'hF2, mgmt_drive, 3'b000, mgmt_reg};
     assign mgmt_dout = mgmt_wdata_r;
 
     always @(posedge clk_sys) begin
@@ -250,8 +258,11 @@ module softcpu_fdd_bridge #(
                 8'h10:   cpu_rdata = {16'd0, mgmt_rdata_cap};
                 8'h18:   cpu_rdata = bram_q_b;
                 8'h34:   cpu_rdata = {28'd0, tds_err, tds_done};
-                8'h3C:   cpu_rdata = disk_size;
-                8'h40:   cpu_rdata = disk_size_b;
+                8'h3C:   cpu_rdata = fdd0_disk_size;
+                8'h40:   cpu_rdata = fdd1_disk_size;
+                8'h44:   cpu_rdata = {29'd0, ide0_request};
+                8'h48:   cpu_rdata = hdd0_disk_size;
+                8'h4C:   cpu_rdata = hdd1_disk_size;
                 default: cpu_rdata = 32'd0;
             endcase
         end
@@ -276,6 +287,7 @@ module softcpu_fdd_bridge #(
         cpu_valid_prev <= cpu_valid;
 
         if (reset) begin
+            mgmt_ide       <= 1'b0;
             mgmt_drive     <= 1'b0;
             mgmt_reg       <= 4'd0;
             mgmt_wdata_r   <= 16'd0;
@@ -288,7 +300,7 @@ module softcpu_fdd_bridge #(
             target_dataslot_length     <= 32'd512;
         end else if (cpu_valid && !cpu_valid_prev && (cpu_wstrb != 0)) begin
             case (cpu_addr[7:0])
-                8'h04: begin mgmt_drive <= cpu_wdata[4]; mgmt_reg <= cpu_wdata[3:0]; end
+                8'h04: begin mgmt_ide <= cpu_wdata[8]; mgmt_drive <= cpu_wdata[4]; mgmt_reg <= cpu_wdata[3:0]; end
                 8'h08: mgmt_wdata_r <= cpu_wdata[15:0];
                 8'h0C: begin
                     if (cpu_wdata[0]) mgmt_wr_req <= 1'b1;
