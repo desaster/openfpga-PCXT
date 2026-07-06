@@ -338,9 +338,10 @@ module core_top (
     wire        gamepad;
     wire [15:0] cont1_key_chip;
 
-    // Game port P1: digital directions from the D-pad in joystick mode, else idle.
+    // Game port P1 stays enabled so games always detect a joystick, like a real
+    // always-present port. It reads centered until Gamepad Mode routes the D-pad in.
     // joy_opts [4]=turbo-track CPU speed [3]=P2 off [1]=P1 off [0]=P1 digital.
-    wire [4:0]  joy_opts = gamepad ? 5'b11001 : 5'b11011;
+    wire [4:0]  joy_opts = 5'b11001;
 
     wire composite_cfg;   // CGA composite colour decode (settings bank, 0x7C)
     wire composite = composite_cfg | xtctl[0];
