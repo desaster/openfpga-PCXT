@@ -5,8 +5,7 @@
 //   outclk_1  100.000 MHz            i8088 (MCL86) CORE_CLK
 //   outclk_2   50.000 MHz  @180 deg  SDRAM device clock (dram_clk), edge-centered
 //
-// These mirror the frequencies the MiSTer PCXT build produces from its 50 MHz
-// reference; here they come from 74.25 MHz via a fractional-N VCO. Quartus solves
+// These come from the 74.25 MHz reference via a fractional-N VCO. Quartus solves
 // the M/N/C counters from the frequency strings, so retuning is a text edit. The
 // outclk_2 phase is the SDRAM clock-forwarding knob for timing closure.
 `timescale 1ns/10ps

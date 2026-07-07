@@ -8,8 +8,8 @@
 #   pll_video:      [0] clk_28_636 (CGA)      [1] clk_pix 14.318  [2] clk_pix_90
 #   APF / bridge:   clk_74a, clk_74b, bridge_spiclk
 #
-# This mirrors the reference SYSTEM.sdc, which false-paths the chipset/CPU domain
-# against the CGA/pixel video domain; our PLLs split along exactly that line.
+# The chipset/CPU domain is false-pathed against the CGA/pixel video domain; our PLLs
+# split along exactly that line.
 #
 # PicoRV32 softcore clock: clk_chipset (50 MHz) gated to a one-in-six pulse, about
 # 8.3 MHz. It is generated in softcpu_subsystem.sv and used as a local clock, so it

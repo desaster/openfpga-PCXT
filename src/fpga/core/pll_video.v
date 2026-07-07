@@ -8,7 +8,7 @@
 // 28.63636 MHz is 2x the NTSC-derived CGA 14.31818 MHz dot clock; the scaler locks
 // to whatever pixel rate we present, so 14.31818 MHz drives the video-out DDIO with
 // its 90-degree companion. A separate PLL from the system one because these do not
-// share a VCO with 50/100 MHz (same reason MiSTer splits pll / pll_system).
+// share a VCO with 50/100 MHz.
 `timescale 1ns/10ps
 module pll_video (
     input  wire refclk,

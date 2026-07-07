@@ -101,6 +101,8 @@ module softcpu_subsystem (
     wire [31:0] cpu_mem_wdata;
     wire  [3:0] cpu_mem_wstrb;
     reg  [31:0] cpu_mem_rdata;
+    // PicoRV32 trap output, deliberately unmonitored: the softcore should never trap, and
+    // Reset PC is the recovery if it somehow does.
     wire        cpu_trap;
 
     picorv32 #(

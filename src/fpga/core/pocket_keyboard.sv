@@ -37,8 +37,8 @@ module pocket_keyboard (
 );
 
     //
-    // PS/2 bit-clock timebase. Matches MiSTer PCXT (PS2DIV=2000 @ 50 MHz
-    // -> ~12.5 kHz), the rate KFPS2KB_Shift_Register is proven against.
+    // PS/2 bit-clock timebase: PS2DIV=2000 @ 50 MHz -> ~12.5 kHz, the rate
+    // KFPS2KB_Shift_Register is proven against.
     //
     localparam [11:0] PS2DIV = 12'd2000;
     reg         clk_ps2 = 1'b0;

@@ -292,12 +292,9 @@ module core_top (
         endcase
     end
 
-    // (MiSTer OSD CONF_STR, status bit-map, and build_id include removed;
-    //  configuration is the constant `status` above.)
-
     wire forced_scandoubler;
     wire [1:0] buttons;
-    // Config register: was the HPS OSD status; now constant Pocket defaults, except
+    // Config register: constant Pocket defaults, except
     // the bits driven by the interact settings menu (CPU speed [18:17], floppy
     // write-protect [20:19]) via the *_cfg registers below, which supersede the
     // constant for those bits. All-zero gives CGA on, EMS on, A000 UMB on, BIOS
@@ -381,7 +378,7 @@ module core_top (
         hgc_mode_video_ff       <= `ENABLE_HGC ? hgc_mode : 1'b0;
 
     //
-    // Config + input stubs (replacing hps_io / hps_ext).
+    // Config + input stubs for the CHIPSET signals the Pocket doesn't drive.
     //
     assign forced_scandoubler = 1'b0;
     assign buttons            = 2'b00;
@@ -1181,7 +1178,6 @@ module core_top (
                     bios_write_n        <= 1'b1;
                     bios_write_byte_cnt <= bios_write_byte_cnt;
                     tandy_bios_write    <= 1'b0;
-                    bios_write_n        <= 1'b1;
                     ioctl_wait          <= 1'b1;
                     bios_write_wait_cnt <= bios_write_wait_cnt + 8'h1;
 
@@ -1597,7 +1593,7 @@ module core_top (
     wire        ram_rw_complete;
 
     // ---- SDRAM boundary: chipset controller -> Pocket dram_* pins ----
-    // CHIPSET drives these (formerly top-level ports); pass straight through.
+    // CHIPSET drives these; pass straight through.
     wire        SDRAM_CLK;
     wire        SDRAM_CKE;
     wire [12:0] SDRAM_A;
@@ -1723,7 +1719,6 @@ module core_top (
     end
 
     // ---- Audio: 16-bit signed mix -> I2S (Pocket audio codec) ----
-    // (the MiSTer AUDIO_MIX stereo-blend is dropped; not reimplemented here.)
     wire [15:0] audio_l = pause_core ? 16'd0 : (boost_cfg ? cmp_l : out_l);
     wire [15:0] audio_r = pause_core ? 16'd0 : (boost_cfg ? cmp_r : out_r);
 
@@ -1740,9 +1735,8 @@ module core_top (
     //
     ////////////////////////////  UART  ///////////////////////////////////
     //
-    // COM1 lives inside CHIPSET; its clock enable is generated here (kept verbatim).
-    // The external MiSTer serial wiring (UART pins, USER-port COM2) is dropped and
-    // the UART inputs are tied to the idle/marking level.
+    // COM1 lives inside CHIPSET; its clock enable is generated here. The UART inputs are
+    // tied to the idle/marking level (no external serial wiring on the Pocket).
 
     logic clk_uart_ff_1;
     logic clk_uart_ff_2;
@@ -1798,10 +1792,8 @@ module core_top (
     //
     ///////////////////////   VIDEO   ///////////////////////
     //
-    // Lean CGA -> Pocket scaler. The MiSTer output chain (monochrome filter,
-    // video_mixer / scandoubler / HQ2x / gamma, the HGC path, jtframe_credits and
-    // the HDMI clock retime) is dropped; the Pocket scaler does scaling/filtering.
-    // Correct DE/porches and display modes are not finalized here yet.
+    // Lean CGA -> Pocket scaler: the Pocket scaler does the scaling and filtering.
+    // DE/porches follow CHIPSET's CGA blanking as-is; display-mode selection is single-mode.
     //
     // r/g/b/HSync/VSync/HBlank/VBlank leave CHIPSET on the clk_28_636 dot-clock
     // domain. clk_pix (14.318 MHz) is 28.636/2 off the same PLL, so it is phase-

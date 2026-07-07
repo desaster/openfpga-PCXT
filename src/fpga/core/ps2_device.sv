@@ -1,7 +1,7 @@
 //
 // PS/2 device serialiser from the MiSTer framework
 // (sys/hps_io.sv). Emulates a PS/2 keyboard/mouse: device->host TX of scancodes
-// plus host->device RX. Kept pristine; the Pocket-side mapper is pocket_ps2_kbd.
+// plus host->device RX. Kept pristine; the Pocket-side mapper is pocket_keyboard.
 //
 // Authors: Till Harbaum and Alexey Melnikov (Sorgelig), MiSTer-devel.  GPL-3.0.
 //

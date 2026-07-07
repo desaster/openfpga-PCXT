@@ -27,8 +27,7 @@
 // the clk_sys / clk_74a crossing is truly asynchronous and uses synch_3.
 //
 // Adapted from the softcore FDD bridge in the myc64-pocket and OpenFPGA ZX Spectrum
-// Pocket cores; the WD1793 sector-buffer side is replaced with the floppy.v
-// mgmt/FIFO side.
+// Pocket cores; here it drives floppy.v's mgmt/FIFO side.
 //
 
 module softcpu_fdd_bridge #(

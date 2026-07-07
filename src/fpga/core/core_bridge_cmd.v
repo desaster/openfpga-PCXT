@@ -21,7 +21,7 @@
 // disk softcore can force written floppy sectors out to SD. The delta is the
 // target_dataslot_flush input, its rising-edge queue, and a 0x0188 branch in the
 // target-command FSM; everything else is agg23's template verbatim. Diff against
-// the openFPGA template to see it; see docs/ACKNOWLEDGEMENTS.md.
+// the openFPGA template to see it.
 //
 
 module core_bridge_cmd (
