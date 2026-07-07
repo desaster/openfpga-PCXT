@@ -57,23 +57,25 @@ module pocket_keyboard (
     end
 
     //
-    // Serialiser. FIFO depth 16 (bits=4) absorbs the multi-byte burst a chord on
-    // the USB keyboard can produce. rx_full blocks TX writes while a host byte is
-    // pending; rd auto-drains it so the BIOS reset command (0xFF) can't wedge it.
+    // Serialiser. The TX FIFO drains slowly and has no full-guard, so the framer paces
+    // its writes against occupancy (tx_credit). rx_full blocks TX writes while a host
+    // byte is pending; rd auto-drains it so the BIOS reset command (0xFF) can't wedge it.
     //
+    localparam PS2_FIFO_BITS = 4;   // TX FIFO depth = 2**bits
     reg  [7:0] wdata;
     reg        we;
     wire [8:0] rdata;
     wire       rx_full = rdata[8];
+    wire       tx_empty;
 
-    ps2_device #(.PS2_FIFO_BITS(4)) u_ps2_device (
+    ps2_device #(.PS2_FIFO_BITS(PS2_FIFO_BITS)) u_ps2_device (
         .clk_sys     (clk),
         .wdata       (wdata),
         .we          (we),
         .ps2_clk     (clk_ps2),
         .ps2_clk_out (ps2_clk_dev),
         .ps2_dat_out (ps2_dat_dev),
-        .tx_empty    (),
+        .tx_empty    (tx_empty),
         .ps2_clk_in  (ps2_clk_host),
         .ps2_dat_in  (ps2_dat_host),
         .rdata       (rdata),
@@ -135,8 +137,8 @@ module pocket_keyboard (
     // Merge: one key event {make, code[7:0]} pushed per clock into a 16-deep
     // queue. Buttons take priority (momentary, few events); the button scanner
     // stalls rather than drop when the queue is full. The USB and virtual-keyboard
-    // sources cannot stall, but each emits only a handful of events against 16
-    // slots plus the 16-byte TX FIFO.
+    // sources cannot stall; each presents a level strobe, so a pending event waits
+    // for queue room.
     //
     localparam QW = 4;
     reg  [8:0]    queue [0:(1<<QW)-1];
@@ -192,6 +194,11 @@ module pocket_keyboard (
     reg [1:0] fst;
     reg [7:0] f_code;
 
+    // Outstanding TX FIFO bytes since it last drained (tx_empty); tx_room is clear once
+    // this reaches the depth, withholding further writes.
+    reg  [PS2_FIFO_BITS:0] tx_credit;
+    wire tx_room = (tx_credit < ((1 << PS2_FIFO_BITS) - 1));
+
     //
     // Typematic repeat. A real PS/2 keyboard resends the held key's make after an
     // initial delay, then at a steady rate; there is no host to do that here, so
@@ -221,9 +228,16 @@ module pocket_keyboard (
     always @(posedge clk) begin
         if (reset) begin
             fst <= S_IDLE; q_rd <= {QW{1'b0}}; we <= 1'b0; wdata <= 8'd0; f_code <= 8'd0;
+            tx_credit <= 0;
             rep_code <= 8'd0; rep_hold <= 1'b0; rep_started <= 1'b0; rep_timer <= 25'd0;
         end else begin
             we <= 1'b0;   // default: one-cycle write pulses
+
+            // TX FIFO occupancy: one more byte per write, cleared on a full drain.
+            if (tx_empty)
+                tx_credit <= we ? 1'b1 : 1'b0;
+            else if (we)
+                tx_credit <= tx_credit + 1'b1;
 
             // Repeat timer counts while a key is held; S_IDLE restarts it on each
             // make or reissue.
@@ -255,7 +269,7 @@ module pocket_keyboard (
                 end
 
                 S_PREFIX: begin              // break: emit 0xF0 first
-                    if (!rx_full) begin
+                    if (!rx_full && tx_room) begin
                         wdata <= 8'hF0;
                         we    <= 1'b1;
                         fst   <= S_CODE;
@@ -263,7 +277,7 @@ module pocket_keyboard (
                 end
 
                 S_CODE: begin                // emit the key code
-                    if (!we && !rx_full) begin
+                    if (!we && !rx_full && tx_room) begin
                         wdata <= f_code;
                         we    <= 1'b1;
                         fst   <= S_IDLE;
