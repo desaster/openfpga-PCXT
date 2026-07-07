@@ -60,6 +60,7 @@
 
 // FDD_TDS_STATUS bits
 #define FDD_TDS_DONE (1 << 0)
+#define FDD_TDS_ERR  (7 << 1) // bits[3:1]: non-zero = transfer error
 
 // floppy.v management registers (mgmt_address[3:0]). Register 0 reads back the
 // requested LBA ({drive, lba[14:0]}) and is written to set media-present.
@@ -110,12 +111,21 @@
 #define SECTOR_BYTES    512
 #define SECTOR_WORDS    128
 
+// Bounded spin for disk waits (dataslot transfers and IDE data-phase handshakes) so a
+// stalled transfer or a guest that abandons one cannot hang the softcore, which serves
+// both disks and draws the OSD. A real wait resolves in well under a millisecond; this
+// is a few seconds of margin, never a false trip.
+#define DISK_SPIN_LIMIT 4000000u
+
 // Dataslot ids of the floppy and hard-disk images. Must match the slots in
 // data.json (and the ids core_top latches the image sizes for).
 #define FDD0_SLOT_ID 2
 #define FDD1_SLOT_ID 3
 #define HDD0_SLOT_ID 4
 #define HDD1_SLOT_ID 5
+
+// Shared disk-bridge sector transfer (disk_tds.c).
+int tds_transfer(uint32_t slot, uint32_t lba, uint32_t dir);
 
 // Service entry points (fdd_service.c).
 void fdd_mount(uint32_t drive, uint32_t sectors);

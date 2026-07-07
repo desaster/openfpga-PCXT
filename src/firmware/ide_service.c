@@ -20,11 +20,6 @@
 #define IDE_STATE_IDLE  0
 #define IDE_STATE_RESET 1
 
-// Bounded spin so a stalled dataslot read or a guest that abandons a transfer cannot
-// hang the softcore (which would also stall floppy service). A real transfer completes
-// in well under a millisecond; this is a few seconds of margin, never a false trip.
-#define IDE_SPIN_LIMIT 4000000u
-
 // Freestanding memset: clang -Os rewrites the IDENTIFY zero/space fills below as
 // memset calls, so provide one. The volatile store keeps it from recognising this
 // very loop as memset (which would recurse).
@@ -54,40 +49,6 @@ static uint32_t ide_mgmt_read(uint32_t reg)
     *FDD_MGMT_ADDR = IDE_TARGET | (reg & 0xF);
     *FDD_MGMT_TRIG = FDD_MGMT_RD;
     return *FDD_MGMT_RDATA & 0xFFFF;
-}
-
-// Pull one 512-byte sector from a drive's image dataslot into the bridge RAM. Mirror
-// of the floppy helper: whole image, no partition offset, so file offset = lba*512.
-// Returns non-zero on success, zero if the transfer timed out.
-static int ide_pull_sector(uint32_t slot, uint32_t lba)
-{
-    *FDD_TDS_ID = slot;
-    *FDD_TDS_OFFSET = lba * SECTOR_BYTES;
-    *FDD_TDS_BRIDGE = FDD_BRIDGE_BASE;
-    *FDD_TDS_LENGTH = SECTOR_BYTES;
-    *FDD_TDS_CLR = 1;
-    *FDD_TDS_TRIG = FDD_TDS_READ;
-    uint32_t to = IDE_SPIN_LIMIT;
-    while (!(*FDD_TDS_STATUS & FDD_TDS_DONE) && --to) {
-    }
-    return to != 0;
-}
-
-// Persist the 512-byte sector now in the bridge RAM to a drive's image dataslot at this
-// LBA. Mirror of ide_pull_sector with the transfer reversed; the write reaches the SD
-// file directly (deferload, no flush). Returns non-zero on success, zero on timeout.
-static int ide_write_sector(uint32_t slot, uint32_t lba)
-{
-    *FDD_TDS_ID = slot;
-    *FDD_TDS_OFFSET = lba * SECTOR_BYTES;
-    *FDD_TDS_BRIDGE = FDD_BRIDGE_BASE;
-    *FDD_TDS_LENGTH = SECTOR_BYTES;
-    *FDD_TDS_CLR = 1;
-    *FDD_TDS_TRIG = FDD_TDS_WRITE;
-    uint32_t to = IDE_SPIN_LIMIT;
-    while (!(*FDD_TDS_STATUS & FDD_TDS_DONE) && --to) {
-    }
-    return to != 0;
 }
 
 // Per-drive geometry and IDENTIFY data. The primary IDE channel carries two drives,
@@ -281,7 +242,7 @@ static void ide_process_read(int multi)
         // the block lands contiguously.
         int ok = 1;
         for (uint32_t s = 0; s < cnt; s++) {
-            if (!ide_pull_sector(slot, lba + s)) {
+            if (!tds_transfer(slot, lba + s, FDD_TDS_READ)) {
                 ok = 0;
                 break;
             }
@@ -315,7 +276,7 @@ static void ide_process_read(int multi)
         }
 
         uint32_t req = 0;
-        uint32_t to = IDE_SPIN_LIMIT;
+        uint32_t to = DISK_SPIN_LIMIT;
         while (!req && --to) {
             req = *IDE_REQUEST;
         }
@@ -355,7 +316,7 @@ static void ide_process_write(int multi)
         ide_set_regs();
 
         uint32_t req = 0;
-        uint32_t to = IDE_SPIN_LIMIT;
+        uint32_t to = DISK_SPIN_LIMIT;
         while (!req && --to) {
             req = *IDE_REQUEST;
         }
@@ -369,7 +330,7 @@ static void ide_process_write(int multi)
         int ok = 1;
         for (uint32_t s = 0; s < cnt; s++) {
             ide_drain_sector();
-            if (!ide_write_sector(slot, lba + s)) {
+            if (!tds_transfer(slot, lba + s, FDD_TDS_WRITE)) {
                 ok = 0;
                 break;
             }

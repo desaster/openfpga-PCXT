@@ -34,19 +34,6 @@ static uint32_t mgmt_read(uint32_t drive, uint32_t reg)
     return *FDD_MGMT_RDATA & 0xFFFF;
 }
 
-// Pull one 512-byte sector from a dataslot into the bridge RAM and wait for it.
-static void pull_sector(uint32_t slot_id, uint32_t lba)
-{
-    *FDD_TDS_ID = slot_id;
-    *FDD_TDS_OFFSET = lba * SECTOR_BYTES;
-    *FDD_TDS_BRIDGE = FDD_BRIDGE_BASE;
-    *FDD_TDS_LENGTH = SECTOR_BYTES;
-    *FDD_TDS_CLR = 1;
-    *FDD_TDS_TRIG = FDD_TDS_READ;
-    while (!(*FDD_TDS_STATUS & FDD_TDS_DONE)) {
-    }
-}
-
 // Stream the 512 bytes now in the bridge RAM into the controller FIFO, in order.
 // The bridge RAM holds the sector little-endian, so the low byte of each word is
 // the earlier file byte. The FIFO register address is set once for the whole run.
@@ -78,20 +65,6 @@ static void pull_fifo(uint32_t drive)
             w |= (*FDD_MGMT_RDATA & 0xFF) << (b * 8);
         }
         *FDD_BRAM_WDATA = w;
-    }
-}
-
-// Persist the 512 bytes now in the bridge RAM to a drive's dataslot at this LBA
-// over the APF target-dataslot write handshake. Mirror of pull_sector.
-static void write_sector(uint32_t slot_id, uint32_t lba)
-{
-    *FDD_TDS_ID = slot_id;
-    *FDD_TDS_OFFSET = lba * SECTOR_BYTES;
-    *FDD_TDS_BRIDGE = FDD_BRIDGE_BASE;
-    *FDD_TDS_LENGTH = SECTOR_BYTES;
-    *FDD_TDS_CLR = 1;
-    *FDD_TDS_TRIG = FDD_TDS_WRITE;
-    while (!(*FDD_TDS_STATUS & FDD_TDS_DONE)) {
     }
 }
 
@@ -160,12 +133,16 @@ void fdd_poll(void)
     if (req & FDD_REQ_READ) {
         uint32_t reg0 = mgmt_read(0, FMGMT_PRESENT);
         uint32_t slot = (reg0 & FDD_LBA_DRIVE) ? FDD1_SLOT_ID : FDD0_SLOT_ID;
-        pull_sector(slot, reg0 & FDD_LBA_MASK);
-        push_sector(0);
+        // Push only on a good read; a failed transfer must not stream stale bytes.
+        if (tds_transfer(slot, reg0 & FDD_LBA_MASK, FDD_TDS_READ)) {
+            push_sector(0);
+        }
     } else if (req & FDD_REQ_WRITE) {
         uint32_t reg0 = mgmt_read(0, FMGMT_PRESENT);
         uint32_t slot = (reg0 & FDD_LBA_DRIVE) ? FDD1_SLOT_ID : FDD0_SLOT_ID;
+        // pull_fifo already completes the controller's write; a failed persist has no
+        // path back to the guest, so the result is not acted on here.
         pull_fifo(0);
-        write_sector(slot, reg0 & FDD_LBA_MASK);
+        tds_transfer(slot, reg0 & FDD_LBA_MASK, FDD_TDS_WRITE);
     }
 }
