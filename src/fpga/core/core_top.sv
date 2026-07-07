@@ -275,12 +275,13 @@ module core_top (
     //
     // The APF captures bridge_rd_data before it pulses bridge_rd, so the RAM read-back
     // is registered on bridge_rd; read combinationally it would lead the address by
-    // one word. core_bridge_cmd already registers its own read.
+    // one word. core_bridge_cmd already registers its own read. The capture is gated to
+    // the 0x6xxxxxxx window so a command-window read cannot overwrite the buffered word.
     wire [31:0] cmd_bridge_rd_data;
     wire [31:0] softcpu_bridge_rd_data;
     reg  [31:0] softcpu_rd_data_buf;
     always @(posedge clk_74a) begin
-        if (bridge_rd)
+        if (bridge_rd && bridge_addr[31:28] == 4'h6)
             softcpu_rd_data_buf <= softcpu_bridge_rd_data;
     end
     always @(*) begin
