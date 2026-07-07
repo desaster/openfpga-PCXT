@@ -7,12 +7,14 @@
 // lifting lives in fdd_service.c and ide_service.c; this is just the top-level loop.
 
 #include "softcpu_regs.h"
+#include "vkb_ui.h"
 
 int main(void)
 {
     // Start with both hard disks absent so the BIOS boots from floppy until (and
     // unless) an image mounts; this also clears a stale-present state after a reset.
     ide_init();
+    vkb_ui_init();
 
     uint32_t mounted_a = 0;
     uint32_t mounted_b = 0;
@@ -53,6 +55,7 @@ int main(void)
         if (mounted_hdd || mounted_hdd_b) {
             ide_poll();
         }
+        vkb_ui_tick();
     }
 
     return 0;

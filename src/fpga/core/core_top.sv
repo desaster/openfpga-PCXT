@@ -386,13 +386,16 @@ module core_top (
     assign buttons            = 2'b00;
 
     // Keyboard driven by pocket_keyboard (instantiated below, near CHIPSET);
-    // it sources ps2_kbd_clk_in / ps2_kbd_data_in. Mouse/joystick idle for now.
+    // it sources ps2_kbd_clk_in / ps2_kbd_data_in. Mouse input idle.
     assign ps2_mouse_clk_out  = 1'b1;   // CHIPSET mouse input, idle
     assign ps2_mouse_data_out = 1'b1;
-    // joy0 bits: [5]=fire2 [4]=fire1 [3]=up [2]=down [1]=left [0]=right.
-    assign joy0  = gamepad ? {8'd0, cont1_key_chip[5], cont1_key_chip[4],
-                                    cont1_key_chip[0], cont1_key_chip[1],
-                                    cont1_key_chip[2], cont1_key_chip[3]} : 14'd0;
+    // joy0 bits: [5]=fire2 [4]=fire1 [3]=up [2]=down [1]=left [0]=right. Held off while
+    // the virtual keyboard is open so navigating it does not also steer the game.
+    assign joy0  = (gamepad && !osd_active)
+                 ? {8'd0, cont1_key_chip[5], cont1_key_chip[4],
+                          cont1_key_chip[0], cont1_key_chip[1],
+                          cont1_key_chip[2], cont1_key_chip[3]}
+                 : 14'd0;
     assign joy1  = 14'd0;
     assign joya0 = 16'd0;
     assign joya1 = 16'd0;
@@ -717,6 +720,17 @@ module core_top (
     wire [31:0] hdd0_disk_sectors = hdd0_slot_bytes >> 9;   // bytes / 512
     wire [31:0] hdd1_disk_sectors = hdd1_slot_bytes >> 9;   // bytes / 512
 
+    // OSD overlay interconnect: the raster counters (driven in the video output
+    // stage) locate the framebuffer readout; the softcore returns a 4bpp palette
+    // index + in-area flag, composited into the picture there.
+    reg  [9:0] osd_hcnt = 10'd0;
+    reg  [9:0] osd_vcnt = 10'd0;
+    wire [3:0] osd_palette_idx;
+    wire       osd_in_area;
+    wire       osd_active;
+    wire [8:0] vkb_key;
+    wire       vkb_stb;
+
     softcpu_subsystem u_softcpu (
         .clk_sys                    (clk_chipset),
         .clk_74a                    (clk_74a),
@@ -750,7 +764,18 @@ module core_top (
         .target_dataslot_done       (target_dataslot_done),
         .target_dataslot_err        (target_dataslot_err),
 
-        .bridge_rd_data_out         (softcpu_bridge_rd_data)
+        .bridge_rd_data_out         (softcpu_bridge_rd_data),
+
+        .clk_pix                    (clk_pix),
+        .osd_hcnt                   (osd_hcnt),
+        .osd_vcnt                   (osd_vcnt),
+        .osd_palette_idx            (osd_palette_idx),
+        .osd_in_area                (osd_in_area),
+
+        .cont1_key                  (cont1_key_chip),
+        .osd_active                 (osd_active),
+        .vkb_key                    (vkb_key),
+        .vkb_stb                    (vkb_stb)
     );
 
     // ---- ROM-load download tracking ----
@@ -1404,6 +1429,9 @@ module core_top (
         .reset        (reset),
         .buttons      (cont1_key),
         .gamepad      (gamepad),
+        .osd_active   (osd_active),
+        .vkb_key      (vkb_key),
+        .vkb_stb      (vkb_stb),
         .cfg_a        (key_a),
         .cfg_b        (key_b),
         .cfg_x        (key_x),
@@ -1845,6 +1873,38 @@ module core_top (
         .rgb_out    ( credits_rgb )
     );
 
+    // OSD overlay raster counters, rebuilt from the CGA blanking edges (active
+    // geometry is mode-dependent, so anchor off blanking, not absolute pixels).
+    // osd_hcnt = pixel within the active line, osd_vcnt = active line in the frame.
+    reg osd_hb_d = 1'b0;
+    always @(posedge clk_pix) begin
+        osd_hb_d <= HBlank;
+        if (HBlank)                  osd_hcnt <= 10'd0;
+        else                         osd_hcnt <= osd_hcnt + 10'd1;
+        if (VBlank)                  osd_vcnt <= 10'd0;
+        else if (osd_hb_d & ~HBlank) osd_vcnt <= osd_vcnt + 10'd1;
+    end
+
+    // Framebuffer palette index -> opaque colour; index 0 is transparent and
+    // falls through to the picture.
+    wire osd_enable;
+    synch_3 s_osd_enable_pix (osd_active, osd_enable, clk_pix);
+    wire osd_show = osd_enable & osd_in_area & (osd_palette_idx != 4'd0);
+    reg [23:0] osd_color;
+    always @(*) begin
+        case (osd_palette_idx)
+            4'd1:    osd_color = 24'hF1E5D5;   // body
+            4'd2:    osd_color = 24'hD5C9B9;   // key face
+            4'd3:    osd_color = 24'hB0A58F;   // accent key face
+            4'd4:    osd_color = 24'h212421;   // key edge
+            4'd5:    osd_color = 24'h101010;   // label
+            4'd6:    osd_color = 24'hFFFFFF;   // cursor
+            4'd7:    osd_color = 24'h30C030;   // latched
+            4'd8:    osd_color = 24'h90FF90;   // latched under cursor
+            default: osd_color = 24'h000000;
+        endcase
+    end
+
     reg  [23:0] vid_rgb = 24'd0;
     reg         vid_de  = 1'b0;
     reg         vid_hs  = 1'b0;
@@ -1859,7 +1919,9 @@ module core_top (
         hs_d    <= HSync;
         vs_d    <= VSync;
         vid_de  <= ~(credits_hb | credits_vb);
-        vid_rgb <= ~(credits_hb | credits_vb) ? credits_rgb : 24'd0;
+        vid_rgb <= (credits_hb | credits_vb) ? 24'd0
+                 : osd_show                  ? osd_color
+                 :                             credits_rgb;
         vid_hs  <= hs_d;
         vid_vs  <= vs_d;
     end

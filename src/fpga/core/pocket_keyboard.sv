@@ -2,11 +2,12 @@
 // Pocket keyboard: merge controller buttons and a docked USB keyboard onto the
 // single PS/2 device that CHIPSET's KFPS2KB receives.
 //
-// KFPS2KB is a real PS/2 serial device, so both input sources must share one
-// serialised output. Two event producers - the cont1_key button map and
-// hid_to_ps2 over the docked USB keyboard (cont3_*) - push key events into a
-// small queue; a framer drains it, emitting each as a Set-2 make ([code]) or
-// break ([0xF0, code]) into the ps2_device serialiser.
+// KFPS2KB is a real PS/2 serial device, so all input sources must share one
+// serialised output. Three event producers - the cont1_key button map,
+// hid_to_ps2 over the docked USB keyboard (cont3_*), and the on-screen virtual
+// keyboard (vkb_*) - push key events into a small queue; a framer drains it,
+// emitting each as a Set-2 make ([code]) or break ([0xF0, code]) into the
+// ps2_device serialiser.
 //
 // Scancodes are Set-2 (KFPS2KB converts Set-2 -> XT). Avoid F11 (0x78) / F12
 // (0x07) in the button map: KFPS2KB consumes them for video-swap / pause.
@@ -17,6 +18,9 @@ module pocket_keyboard (
     input        reset,
     input [15:0] buttons,      // cont1_key
     input        gamepad,      // 1 = joystick mode: buttons drive the game port, not keys
+    input        osd_active,   // 1 = virtual keyboard open: suppress button typing
+    input  [8:0] vkb_key,      // virtual-keyboard event: {make, Set-2 code}
+    input        vkb_stb,      // toggles per firmware-emitted event
     input  [7:0] cfg_a,        // Set-2 scancode per face button (0 = unmapped)
     input  [7:0] cfg_b,
     input  [7:0] cfg_x,
@@ -83,8 +87,14 @@ module pocket_keyboard (
     // Set-2 code from the interact-menu config (cfg_*, 0 = unmapped); Select/Start are
     // fixed to Tab/Enter. Selected by the current scan index.
     //
-    reg [9:0] btn_s0, btn_s, btn_prev;
+    reg [9:0] btn_s0, btn_s, btn_prev, btn_mask;
     reg [3:0] btn_idx;
+
+    // Key-mapped buttons before OSD gating: Start/Select always, plus (unless in
+    // joystick mode) the D-pad and A/B/X/Y face buttons. btn_mask holds those still
+    // down when the OSD closes so they cannot emit a make until released (closing the
+    // keyboard with B would otherwise type B's mapped key into the guest).
+    wire [9:0] btn_gated = {buttons[15], buttons[14], gamepad ? 8'd0 : buttons[7:0]};
 
     wire [7:0] cur_code = (btn_idx == 4'd0) ? 8'h75 :  // up     -> keypad 8
                           (btn_idx == 4'd1) ? 8'h72 :  // down   -> keypad 2
@@ -124,8 +134,9 @@ module pocket_keyboard (
     //
     // Merge: one key event {make, code[7:0]} pushed per clock into a 16-deep
     // queue. Buttons take priority (momentary, few events); the button scanner
-    // stalls rather than drop when the queue is full. The USB source cannot stall,
-    // but a chord is a handful of events against 16 slots plus the 16-byte TX FIFO.
+    // stalls rather than drop when the queue is full. The USB and virtual-keyboard
+    // sources cannot stall, but each emits only a handful of events against 16
+    // slots plus the 16-byte TX FIFO.
     //
     localparam QW = 4;
     reg  [8:0]    queue [0:(1<<QW)-1];
@@ -134,17 +145,22 @@ module pocket_keyboard (
     wire          q_full  = ((q_wr + 1'b1) == q_rd);
 
     reg  usb_stb_d;
+    reg  vkb_stb_d;
     wire btn_change = (btn_s[btn_idx] != btn_prev[btn_idx]);
     wire usb_pend   = (usb_key[10] != usb_stb_d);
+    wire vkb_pend   = (vkb_stb != vkb_stb_d);
 
     always @(posedge clk) begin
         if (reset) begin
-            btn_s0 <= 10'd0; btn_s <= 10'd0; btn_prev <= 10'd0; btn_idx <= 4'd0;
-            usb_stb_d <= 1'b0; q_wr <= {QW{1'b0}};
+            btn_s0 <= 10'd0; btn_s <= 10'd0; btn_prev <= 10'd0; btn_mask <= 10'd0; btn_idx <= 4'd0;
+            usb_stb_d <= 1'b0; vkb_stb_d <= 1'b0; q_wr <= {QW{1'b0}};
         end else begin
             // Start/Select stay live in joystick mode; D-pad + A/B/X/Y are gated off.
-            btn_s0 <= {buttons[15], buttons[14], gamepad ? 8'd0 : buttons[7:0]};
-            btn_s  <= btn_s0;
+            // While the virtual keyboard is open every controller key is suppressed,
+            // and any button still held when it closes stays masked until released.
+            btn_s0   <= osd_active ? 10'd0 : (btn_gated & ~btn_mask);
+            btn_s    <= btn_s0;
+            btn_mask <= osd_active ? btn_gated : (btn_mask & btn_gated);
 
             if (!q_full) begin
                 if (btn_change) begin
@@ -153,6 +169,10 @@ module pocket_keyboard (
                         q_wr        <= q_wr + 1'b1;
                     end
                     btn_prev[btn_idx] <= btn_s[btn_idx];
+                end else if (vkb_pend) begin            // Source C: on-screen keyboard
+                    queue[q_wr] <= vkb_key;
+                    q_wr        <= q_wr + 1'b1;
+                    vkb_stb_d   <= vkb_stb;
                 end else if (usb_pend) begin
                     queue[q_wr] <= {usb_key[9], usb_key[7:0]};
                     q_wr        <= q_wr + 1'b1;
@@ -172,18 +192,65 @@ module pocket_keyboard (
     reg [1:0] fst;
     reg [7:0] f_code;
 
+    //
+    // Typematic repeat. A real PS/2 keyboard resends the held key's make after an
+    // initial delay, then at a steady rate; there is no host to do that here, so
+    // the framer synthesises it: it latches the last held key (armed on a make,
+    // cleared on that key's break) and, while idle, reissues its make on the
+    // delay/rate timer. Toggle-lock keys are excluded so a held lock cannot flip
+    // repeatedly.
+    //
+    localparam [24:0] REP_DELAY = 25'd25_000_000;  // ~500 ms at 50 MHz
+    localparam [24:0] REP_RATE  = 25'd5_000_000;   // ~100 ms -> ~10 cps
+    reg  [7:0]  rep_code;
+    reg         rep_hold;
+    reg         rep_started;
+    reg  [24:0] rep_timer;
+    wire [24:0] rep_thresh = rep_started ? REP_RATE : REP_DELAY;
+    wire        rep_due    = rep_hold && (rep_timer >= rep_thresh);
+
+    wire [8:0]  q_head     = queue[q_rd];
+    wire        q_head_rep = (q_head[7:0] != 8'h58) &&  // not Caps Lock
+                             (q_head[7:0] != 8'h77) &&  // not Num Lock
+                             (q_head[7:0] != 8'h7E) &&  // not Scroll Lock
+                             (q_head[7:0] != 8'h12) &&  // not left Shift
+                             (q_head[7:0] != 8'h59) &&  // not right Shift
+                             (q_head[7:0] != 8'h14) &&  // not Ctrl
+                             (q_head[7:0] != 8'h11);    // not Alt
+
     always @(posedge clk) begin
         if (reset) begin
             fst <= S_IDLE; q_rd <= {QW{1'b0}}; we <= 1'b0; wdata <= 8'd0; f_code <= 8'd0;
+            rep_code <= 8'd0; rep_hold <= 1'b0; rep_started <= 1'b0; rep_timer <= 25'd0;
         end else begin
             we <= 1'b0;   // default: one-cycle write pulses
+
+            // Repeat timer counts while a key is held; S_IDLE restarts it on each
+            // make or reissue.
+            if (!rep_hold)
+                rep_timer <= 25'd0;
+            else if (rep_timer < rep_thresh)
+                rep_timer <= rep_timer + 25'd1;
 
             case (fst)
                 S_IDLE: begin
                     if (!q_empty) begin
-                        f_code <= queue[q_rd][7:0];
+                        f_code <= q_head[7:0];
                         q_rd   <= q_rd + 1'b1;
-                        fst    <= queue[q_rd][8] ? S_CODE : S_PREFIX;  // make vs break
+                        fst    <= q_head[8] ? S_CODE : S_PREFIX;  // make vs break
+                        if (q_head[8]) begin                     // make: (re)arm repeat
+                            rep_hold    <= q_head_rep;
+                            rep_code    <= q_head[7:0];
+                            rep_started <= 1'b0;
+                            rep_timer   <= 25'd0;
+                        end else if (q_head[7:0] == rep_code) begin
+                            rep_hold    <= 1'b0;                 // break of the held key
+                        end
+                    end else if (rep_due) begin                  // reissue the held make
+                        f_code      <= rep_code;
+                        fst         <= S_CODE;
+                        rep_started <= 1'b1;
+                        rep_timer   <= 25'd0;
                     end
                 end
 

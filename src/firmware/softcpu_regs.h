@@ -25,6 +25,26 @@
 #define HDD0_DISK_SIZE ((volatile uint32_t *) 0x30000048) // R: hard-disk-0 image size in sectors
 #define HDD1_DISK_SIZE ((volatile uint32_t *) 0x3000004C) // R: hard-disk-1 image size in sectors
 
+// OSD framebuffer (softcpu_subsystem), 636x81 at 4bpp, mapped in the 0x4 region.
+#define OSD_FB ((uint8_t *) 0x40000000)
+
+// Status / control (0x2 region).
+#define CONT1_KEY ((volatile uint32_t *) 0x20000000) // R: pocket controller-1 buttons
+#define VKB_CTRL  ((volatile uint32_t *) 0x20000004) // W: bit0 = OSD shown, bit1 = OSD at top
+#define VKB_KEY   ((volatile uint32_t *) 0x20000008) // W: bit8 = make, bits[7:0] Set-2 code
+
+// cont1_key button bits (Analogue Pocket layout).
+#define BTN_UP    (1 << 0)
+#define BTN_DOWN  (1 << 1)
+#define BTN_LEFT  (1 << 2)
+#define BTN_RIGHT (1 << 3)
+#define BTN_A     (1 << 4)
+#define BTN_B     (1 << 5)
+#define BTN_X     (1 << 6)
+#define BTN_Y     (1 << 7)
+#define BTN_L1    (1 << 8)
+#define BTN_R1    (1 << 9)
+
 // FDD_REQUEST bits
 #define FDD_REQ_READ  (1 << 0)
 #define FDD_REQ_WRITE (1 << 1)

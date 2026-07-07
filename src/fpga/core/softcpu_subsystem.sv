@@ -1,11 +1,12 @@
 //
-// PicoRV32 disk-service softcore subsystem.
+// PicoRV32 softcore subsystem.
 //
-// A small RISC-V computer that services the floppy controller. It runs firmware
-// from an on-chip ROM, with work RAM for its stack and buffers, and reaches the
-// disk bridge (softcpu_fdd_bridge) through memory-mapped registers at 0x3xxxxxxx.
-// The bridge pulls sectors from an APF dataslot and streams them into floppy.v's
-// mgmt FIFO.
+// A small RISC-V computer that services the disk controllers and draws the
+// on-screen keyboard. It runs firmware from an on-chip ROM, with work RAM for its
+// stack and buffers, and reaches the disk bridge (softcpu_fdd_bridge) through
+// memory-mapped registers at 0x3xxxxxxx; the bridge pulls sectors from an APF
+// dataslot and streams them into the floppy and IDE controllers' mgmt FIFOs. It
+// also owns the OSD framebuffer, read out below in the video clock domain.
 //
 // The CPU runs on clk_pico, a clock derived from clk_sys by gating it down to a
 // single-cycle pulse every six cycles (about 8.3 MHz). Every clk_pico edge is
@@ -57,7 +58,25 @@ module softcpu_subsystem (
     input         target_dataslot_done,
     input   [2:0] target_dataslot_err,
 
-    output [31:0] bridge_rd_data_out
+    output [31:0] bridge_rd_data_out,
+
+    // OSD overlay: framebuffer read out in the video clock domain (clk_pix),
+    // located by the raster counters from the video output stage. The CPU write
+    // side of the framebuffer lands in clk_pico.
+    input         clk_pix,
+    input   [9:0] osd_hcnt,
+    input   [9:0] osd_vcnt,
+    output  [3:0] osd_palette_idx,
+    output        osd_in_area,
+
+    // Controller-1 buttons in; OSD-shown flag out (both firmware-facing).
+    input  [15:0] cont1_key,
+    output        osd_active,
+
+    // Virtual-keyboard key event: {make, Set-2 code}, with a strobe that toggles
+    // per firmware write so pocket_keyboard pushes exactly one queue entry.
+    output  [8:0] vkb_key,
+    output        vkb_stb
 );
 
     //
@@ -103,12 +122,56 @@ module softcpu_subsystem (
     );
 
     //
-    // Address decode. ROM at 0x0xxxxxxx, work RAM at 0x1xxxxxxx, the disk bridge at
-    // 0x3xxxxxxx. The 0x2xxxxxxx status region is unused and reads back zero.
+    // Address decode. ROM at 0x0xxxxxxx, work RAM at 0x1xxxxxxx, status/control at
+    // 0x2xxxxxxx, the disk bridge at 0x3xxxxxxx, the OSD framebuffer at 0x4xxxxxxx.
     //
-    wire sel_rom = cpu_mem_valid && (cpu_mem_addr[31:28] == 4'h0);
-    wire sel_ram = cpu_mem_valid && (cpu_mem_addr[31:28] == 4'h1);
-    wire sel_fdd = cpu_mem_valid && (cpu_mem_addr[31:28] == 4'h3);
+    wire sel_rom    = cpu_mem_valid && (cpu_mem_addr[31:28] == 4'h0);
+    wire sel_ram    = cpu_mem_valid && (cpu_mem_addr[31:28] == 4'h1);
+    wire sel_status = cpu_mem_valid && (cpu_mem_addr[31:28] == 4'h2);
+    wire sel_fdd    = cpu_mem_valid && (cpu_mem_addr[31:28] == 4'h3);
+    wire sel_fb     = cpu_mem_valid && (cpu_mem_addr[31:28] == 4'h4);
+
+    // OSD control at 0x20000004: bit0 = shown, bit1 = position (0 = low, 1 = high).
+    reg osd_active_r = 1'b0;
+    reg osd_pos_r    = 1'b0;
+    always @(posedge clk_pico) begin
+        if (reset) begin
+            osd_active_r <= 1'b0;
+            osd_pos_r    <= 1'b0;
+        end else if (sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[3:2] == 2'd1) begin
+            osd_active_r <= cpu_mem_wdata[0];
+            osd_pos_r    <= cpu_mem_wdata[1];
+        end
+    end
+    assign osd_active = osd_active_r;
+
+    // The position bit selects the vertical origin in the video clock domain.
+    wire osd_pos_pix;
+    synch_3 s_osd_pos_pix (osd_pos_r, osd_pos_pix, clk_pix);
+
+    // Virtual-keyboard key event, written by the firmware at 0x20000008. The CPU
+    // holds a store across two clk_pico cycles, so the write is edge-detected to
+    // toggle the strobe exactly once; pocket_keyboard reads the strobe directly
+    // (clk_pico is a gated clk_sys) and turns each toggle into one queue push.
+    wire      vkb_wr = sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[3:2] == 2'd2;
+    reg       vkb_wr_d  = 1'b0;
+    reg [8:0] vkb_key_r = 9'd0;
+    reg       vkb_stb_r = 1'b0;
+    always @(posedge clk_pico) begin
+        if (reset) begin
+            vkb_wr_d  <= 1'b0;
+            vkb_key_r <= 9'd0;
+            vkb_stb_r <= 1'b0;
+        end else begin
+            vkb_wr_d <= vkb_wr;
+            if (vkb_wr && !vkb_wr_d) begin
+                vkb_key_r <= cpu_mem_wdata[8:0];
+                vkb_stb_r <= ~vkb_stb_r;
+            end
+        end
+    end
+    assign vkb_key = vkb_key_r;
+    assign vkb_stb = vkb_stb_r;
 
     //
     // Memory ready. The ROM read is registered, so it needs two clk_pico cycles;
@@ -147,13 +210,13 @@ module softcpu_subsystem (
     assign cpu_mem_ready = cpu_mem_ready_rom | cpu_mem_ready_other;
 
     //
-    // Firmware ROM: 8 KB (2048 x 32), initialised from the built firmware image.
+    // Firmware ROM: 16 KB (4096 x 32), initialised from the built firmware image.
     // The path is relative to the Quartus project directory (src/fpga).
     //
     wire [31:0] rom_rdata;
 
     sprom #(
-        .aw(11),
+        .aw(12),
         .dw(32),
         .MEM_INIT_FILE("../firmware/firmware.vh")
     ) pico_rom (
@@ -161,7 +224,7 @@ module softcpu_subsystem (
         .rst  (reset),
         .ce   (sel_rom),
         .oe   (1'b1),
-        .addr (cpu_mem_addr[12:2]),
+        .addr (cpu_mem_addr[13:2]),
         .dout (rom_rdata)
     );
 
@@ -192,6 +255,81 @@ module softcpu_subsystem (
     end
 
     wire [31:0] ram_rdata = {ram3_q, ram2_q, ram1_q, ram0_q};
+
+    //
+    // OSD framebuffer: 636x81 at 4bpp (two pixels per byte), four byte lanes.
+    // Port A is the CPU read/write path (clk_pico) the firmware draws through;
+    // Port B reads it in the video clock domain for the overlay.
+    //
+    reg [7:0] fb0 [0:8191];
+    reg [7:0] fb1 [0:8191];
+    reg [7:0] fb2 [0:8191];
+    reg [7:0] fb3 [0:8191];
+
+    // Port A: CPU read/write, clk_pico domain, registered read (one cycle).
+    wire [12:0] fb_word_addr = cpu_mem_addr[14:2];
+    reg [7:0] fb0_qa, fb1_qa, fb2_qa, fb3_qa;
+    always @(posedge clk_pico) begin
+        if (sel_fb) begin
+            if (cpu_mem_wstrb[0]) fb0[fb_word_addr] <= cpu_mem_wdata[7:0];
+            if (cpu_mem_wstrb[1]) fb1[fb_word_addr] <= cpu_mem_wdata[15:8];
+            if (cpu_mem_wstrb[2]) fb2[fb_word_addr] <= cpu_mem_wdata[23:16];
+            if (cpu_mem_wstrb[3]) fb3[fb_word_addr] <= cpu_mem_wdata[31:24];
+            fb0_qa <= fb0[fb_word_addr];
+            fb1_qa <= fb1[fb_word_addr];
+            fb2_qa <= fb2[fb_word_addr];
+            fb3_qa <= fb3[fb_word_addr];
+        end
+    end
+    wire [31:0] fb_rdata = {fb3_qa, fb2_qa, fb1_qa, fb0_qa};
+
+    // Display area within the active CGA raster, 636x81 drawn 1:1. The firmware
+    // selects the vertical origin so the overlay can sit low or high.
+    localparam [9:0] OSD_W  = 10'd636;
+    localparam [9:0] OSD_H  = 10'd81;
+    localparam [9:0] OSD_X0 = 10'd2;
+    wire [9:0] OSD_Y0 = osd_pos_pix ? 10'd5 : 10'd111;
+    wire [9:0] OSD_X1 = OSD_X0 + OSD_W - 10'd1;
+    wire [9:0] OSD_Y1 = OSD_Y0 + OSD_H - 10'd1;
+
+    wire osd_in_bounds = (osd_hcnt >= OSD_X0) && (osd_hcnt <= OSD_X1) &&
+                         (osd_vcnt >= OSD_Y0) && (osd_vcnt <= OSD_Y1);
+
+    // Non-power-of-two stride (636/2 = 318 bytes/row), so the row offset is a
+    // constant multiply rather than a bit-concatenation.
+    wire  [9:0] osd_x = osd_hcnt - OSD_X0;                                  // 0..635
+    wire  [9:0] osd_y = osd_vcnt - OSD_Y0;                                  // 0..80
+    wire [15:0] osd_byte_addr = osd_y[6:0] * 16'd318 + {7'd0, osd_x[9:1]};  // y*318 + x/2
+    wire [12:0] osd_word_addr = osd_byte_addr[14:2];
+
+    // Port B: registered read in the video clock domain; lane/nibble/area
+    // selectors are pipelined one stage to match the read latency.
+    reg [7:0] fb0_qb, fb1_qb, fb2_qb, fb3_qb;
+    reg [1:0] osd_lane_r;
+    reg       osd_nib_r;
+    reg       osd_in_area_r;
+    always @(posedge clk_pix) begin
+        fb0_qb <= fb0[osd_word_addr];
+        fb1_qb <= fb1[osd_word_addr];
+        fb2_qb <= fb2[osd_word_addr];
+        fb3_qb <= fb3[osd_word_addr];
+        osd_lane_r    <= osd_byte_addr[1:0];
+        osd_nib_r     <= osd_x[0];
+        osd_in_area_r <= osd_in_bounds;
+    end
+
+    reg [7:0] osd_byte;
+    always_comb begin
+        case (osd_lane_r)
+            2'd0:    osd_byte = fb0_qb;
+            2'd1:    osd_byte = fb1_qb;
+            2'd2:    osd_byte = fb2_qb;
+            default: osd_byte = fb3_qb;
+        endcase
+    end
+
+    assign osd_palette_idx = osd_nib_r ? osd_byte[3:0] : osd_byte[7:4];
+    assign osd_in_area     = osd_in_area_r;
 
     //
     // Disk bridge: APF dataslot to floppy.v mgmt bus, mapped at 0x3xxxxxxx.
@@ -250,7 +388,9 @@ module softcpu_subsystem (
         casez (cpu_mem_addr)
             32'h0???_????: cpu_mem_rdata = rom_rdata;
             32'h1???_????: cpu_mem_rdata = ram_rdata;
+            32'h2000_0000: cpu_mem_rdata = {16'd0, cont1_key};
             32'h3???_????: cpu_mem_rdata = fdd_rdata;
+            32'h4???_????: cpu_mem_rdata = fb_rdata;
             default:       cpu_mem_rdata = 32'd0;
         endcase
     end

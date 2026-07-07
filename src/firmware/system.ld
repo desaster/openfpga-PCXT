@@ -1,10 +1,10 @@
-/* PicoRV32 disk softcore memory map.
+/* PicoRV32 disk / OSD softcore memory map.
  * ROM holds the firmware image (loaded into the softcore sprom via firmware.vh);
- * RAM holds .data/.bss and the stack. No OSD framebuffer on this core, so RAM
- * sits at the base of the 0x1xxxxxxx data region. Addresses must match the
- * address decode in softcpu_subsystem. */
+ * RAM holds .data/.bss and the stack. The OSD framebuffer is a separate MMIO
+ * region (0x4xxxxxxx), so RAM has the whole 0x1xxxxxxx data region. Addresses
+ * must match the address decode in softcpu_subsystem. */
 MEMORY {
-    ROM (rx)  : ORIGIN = 0x00000000, LENGTH = 8K
+    ROM (rx)  : ORIGIN = 0x00000000, LENGTH = 16K
     RAM (rwx) : ORIGIN = 0x10000000, LENGTH = 8K
 }
 
