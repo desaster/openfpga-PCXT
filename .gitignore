@@ -39,6 +39,7 @@ c5_pin_model_dump.txt
 *_netlist
 *.cdf
 *.o
+*.d
 src/firmware/firmware.vh
 src/firmware/firmware.elf
 src/firmware/firmware.bin
