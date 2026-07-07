@@ -248,13 +248,21 @@ module softcpu_fdd_bridge #(
     end
 
     //
+    // Register floppy.v's combinational request into clk_sys so the firmware reads a
+    // settled value; the clk_pico read crossing is untimed.
+    //
+    reg [1:0] fdd_request_r;
+    always @(posedge clk_sys)
+        fdd_request_r <= fdd_request;
+
+    //
     // Firmware register read (combinational).
     //
     always_comb begin
         cpu_rdata = 32'd0;
         if (cpu_valid) begin
             case (cpu_addr[7:0])
-                8'h00:   cpu_rdata = {30'd0, fdd_request};
+                8'h00:   cpu_rdata = {30'd0, fdd_request_r};
                 8'h10:   cpu_rdata = {16'd0, mgmt_rdata_cap};
                 8'h18:   cpu_rdata = bram_q_b;
                 8'h34:   cpu_rdata = {28'd0, tds_err, tds_done};
