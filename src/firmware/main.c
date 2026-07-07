@@ -9,6 +9,16 @@
 #include "softcpu_regs.h"
 #include "vkb_ui.h"
 
+// Read a disk-size register twice and return it only if the samples agree, else 0. The
+// size crosses clock domains per-bit and can tear as it changes from 0 to the image size;
+// two matching reads reject a half-updated value, and the caller retries on the next poll.
+static uint32_t stable_size(volatile uint32_t *reg)
+{
+    uint32_t a = *reg;
+    uint32_t b = *reg;
+    return (a == b) ? a : 0;
+}
+
 int main(void)
 {
     // Start with both hard disks absent so the BIOS boots from floppy until (and
@@ -23,28 +33,28 @@ int main(void)
 
     for (;;) {
         if (!mounted_a) {
-            uint32_t sectors = *FDD0_DISK_SIZE;
+            uint32_t sectors = stable_size(FDD0_DISK_SIZE);
             if (sectors != 0) {
                 fdd_mount(0, sectors);
                 mounted_a = 1;
             }
         }
         if (!mounted_b) {
-            uint32_t sectors = *FDD1_DISK_SIZE;
+            uint32_t sectors = stable_size(FDD1_DISK_SIZE);
             if (sectors != 0) {
                 fdd_mount(1, sectors);
                 mounted_b = 1;
             }
         }
         if (!mounted_hdd) {
-            uint32_t sectors = *HDD0_DISK_SIZE;
+            uint32_t sectors = stable_size(HDD0_DISK_SIZE);
             if (sectors != 0) {
                 ide_mount(0, sectors);
                 mounted_hdd = 1;
             }
         }
         if (!mounted_hdd_b) {
-            uint32_t sectors = *HDD1_DISK_SIZE;
+            uint32_t sectors = stable_size(HDD1_DISK_SIZE);
             if (sectors != 0) {
                 ide_mount(1, sectors);
                 mounted_hdd_b = 1;
