@@ -104,7 +104,8 @@ function automatic [7:0] hid2ps2;
 		8'h2F: hid2ps2 = 8'h54; // [
 		8'h30: hid2ps2 = 8'h5B; // ]
 		8'h31: hid2ps2 = 8'h5D; // backslash
-		8'h64: hid2ps2 = 8'h5D; // ISO key near LShift -> backslash
+		8'h32: hid2ps2 = 8'h5D; // non-US # / ~
+		8'h64: hid2ps2 = 8'h61; // ISO 102nd key (< >)
 		8'h33: hid2ps2 = 8'h4C; // ;
 		8'h34: hid2ps2 = 8'h52; // '
 		8'h35: hid2ps2 = 8'h0E; // `
@@ -126,13 +127,41 @@ function automatic [7:0] hid2ps2;
 		8'h44: hid2ps2 = 8'h78; // F11
 		8'h45: hid2ps2 = 8'h07; // F12
 
+		// Print Screen and Pause are multi-byte sequences; return a sentinel the framer expands.
+		8'h46: hid2ps2 = 8'hE2; // print screen (sequence)
+		8'h48: hid2ps2 = 8'hE1; // pause (sequence)
+
+		// Nav/arrows reuse the keypad codes and keypad / + Enter the main codes; hid_ext
+		// flags these so the framer adds the E0 prefix that distinguishes them from the twins.
+		8'h47: hid2ps2 = 8'h7E; // scroll lock
+		8'h49: hid2ps2 = 8'h70; // insert
 		8'h4A: hid2ps2 = 8'h6C; // home
 		8'h4B: hid2ps2 = 8'h7D; // pgup
 		8'h4C: hid2ps2 = 8'h71; // del
+		8'h4D: hid2ps2 = 8'h69; // end
+		8'h4E: hid2ps2 = 8'h7A; // pgdn
 		8'h4F: hid2ps2 = 8'h74; // right
 		8'h50: hid2ps2 = 8'h6B; // left
 		8'h51: hid2ps2 = 8'h72; // down
 		8'h52: hid2ps2 = 8'h75; // up
+
+		8'h53: hid2ps2 = 8'h77; // num lock
+		8'h54: hid2ps2 = 8'h4A; // keypad / -> main / code
+		8'h55: hid2ps2 = 8'h7C; // keypad *
+		8'h56: hid2ps2 = 8'h7B; // keypad -
+		8'h57: hid2ps2 = 8'h79; // keypad +
+		8'h58: hid2ps2 = 8'h5A; // keypad enter -> main enter code
+		8'h59: hid2ps2 = 8'h69; // keypad 1
+		8'h5A: hid2ps2 = 8'h72; // keypad 2
+		8'h5B: hid2ps2 = 8'h7A; // keypad 3
+		8'h5C: hid2ps2 = 8'h6B; // keypad 4
+		8'h5D: hid2ps2 = 8'h73; // keypad 5
+		8'h5E: hid2ps2 = 8'h74; // keypad 6
+		8'h5F: hid2ps2 = 8'h6C; // keypad 7
+		8'h60: hid2ps2 = 8'h75; // keypad 8
+		8'h61: hid2ps2 = 8'h7D; // keypad 9
+		8'h62: hid2ps2 = 8'h70; // keypad 0
+		8'h63: hid2ps2 = 8'h71; // keypad .
 
 		default: hid2ps2 = 8'h00;
 	endcase
@@ -152,16 +181,40 @@ function automatic [7:0] mod2ps2;
 	endcase
 endfunction
 
-wire [7:0] curr_at  = slot_code(scan_curr, slot);
-wire [7:0] prev_at  = slot_code(scan_prev, slot);
-wire [7:0] ps2_curr = hid2ps2(curr_at);
-wire [7:0] ps2_prev = hid2ps2(prev_at);
-wire [7:0] ps2_mod  = mod2ps2(slot);
+// 1 for keys the framer must prefix with E0 (extended keys).
+function automatic hid_ext;
+	input [7:0] h;
+	case (h)
+		8'h49, 8'h4A, 8'h4B, 8'h4C, 8'h4D, 8'h4E, // insert home pgup del end pgdn
+		8'h4F, 8'h50, 8'h51, 8'h52,               // arrows
+		8'h54, 8'h58: hid_ext = 1'b1;             // keypad / and Enter
+		default:      hid_ext = 1'b0;
+	endcase
+endfunction
+
+// Right Ctrl / Right Alt are E0-extended.
+function automatic mod_ext;
+	input [2:0] idx;
+	mod_ext = (idx == 3'd4) || (idx == 3'd6);
+endfunction
+
+wire [7:0] curr_at   = slot_code(scan_curr, slot);
+wire [7:0] prev_at   = slot_code(scan_prev, slot);
+wire [7:0] ps2_curr  = hid2ps2(curr_at);
+wire [7:0] ps2_prev  = hid2ps2(prev_at);
+wire [7:0] ps2_mod   = mod2ps2(slot);
+wire       curr_ext  = hid_ext(curr_at);
+wire       prev_ext  = hid_ext(prev_at);
+wire       mod_ext_w = mod_ext(slot);
 
 wire is_new_press   = (curr_at != 0) && (ps2_curr != 0) && !code_in(curr_at, scan_prev);
 wire is_new_release = (prev_at != 0) && (ps2_prev != 0) && !code_in(prev_at, scan_curr);
 wire is_mod_press   = scan_mcurr[slot] && !scan_mprev[slot] && (ps2_mod != 0);
 wire is_mod_release = !scan_mcurr[slot] && scan_mprev[slot] && (ps2_mod != 0);
+
+// A phantom-rollover report (ErrorRollOver 0x01 in the key slots) is ignored so held
+// keys are not spuriously released when more keys are down than the keyboard can report.
+wire rollover = code_in(8'h01, curr_raw);
 
 localparam S_IDLE     = 3'd0,
            S_MPRESS   = 3'd1,
@@ -183,7 +236,7 @@ always @(posedge clk) begin
 		case (state)
 
 		S_IDLE: begin
-			if (data_changed) begin
+			if (data_changed && !rollover) begin
 				scan_curr  <= curr_raw;
 				scan_prev  <= prev_raw;
 				scan_mcurr <= mods;
@@ -197,7 +250,7 @@ always @(posedge clk) begin
 
 		S_MPRESS: begin
 			if (is_mod_press)
-				ps2_key <= {~ps2_key[10], 1'b1, 1'b0, ps2_mod};
+				ps2_key <= {~ps2_key[10], 1'b1, mod_ext_w, ps2_mod};
 			if (slot == 3'd7) begin
 				state <= S_PRESS;
 				slot  <= 0;
@@ -207,7 +260,7 @@ always @(posedge clk) begin
 
 		S_PRESS: begin
 			if (is_new_press)
-				ps2_key <= {~ps2_key[10], 1'b1, 1'b0, ps2_curr};
+				ps2_key <= {~ps2_key[10], 1'b1, curr_ext, ps2_curr};
 			if (slot == 3'd5) begin
 				state <= S_RELEASE;
 				slot  <= 0;
@@ -217,7 +270,7 @@ always @(posedge clk) begin
 
 		S_RELEASE: begin
 			if (is_new_release)
-				ps2_key <= {~ps2_key[10], 1'b0, 1'b0, ps2_prev};
+				ps2_key <= {~ps2_key[10], 1'b0, prev_ext, ps2_prev};
 			if (slot == 3'd5) begin
 				state <= S_MRELEASE;
 				slot  <= 0;
@@ -227,7 +280,7 @@ always @(posedge clk) begin
 
 		S_MRELEASE: begin
 			if (is_mod_release)
-				ps2_key <= {~ps2_key[10], 1'b0, 1'b0, ps2_mod};
+				ps2_key <= {~ps2_key[10], 1'b0, mod_ext_w, ps2_mod};
 			if (slot == 3'd7)
 				state <= S_IDLE;
 			else

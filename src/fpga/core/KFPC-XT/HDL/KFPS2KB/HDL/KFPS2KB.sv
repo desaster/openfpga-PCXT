@@ -4,6 +4,11 @@
 //
 // Written by kitune-san
 //
+// Local modification (PCXT Pocket port, 2026-07-07): the F11 (0x78) / F12 (0x07) key
+// intercepts that toggled swap_video / pause_core are removed, so both keys pass through
+// as normal keycodes; this port does not repurpose them. swap_video / pause_core stay at
+// their reset values (unused here).
+//
 module KFPS2KB #(
     parameter over_time = 16'd1000
 ) (
@@ -252,20 +257,8 @@ module KFPS2KB #(
                 keycode     <= 8'h00;
                 break_flag  <= 1'b1;
             end
-            else if (register == 8'h78) begin
-                // F11: CGA <-> Hercules (PCXT), RGB <-> Composite (Tandy)
-                irq         <= 1'b0;
-                keycode     <= 8'h00;
-                break_flag  <= 1'b0;
-                swap_video <= break_flag ? ~swap_video : swap_video;
-            end
-            else if (register == 8'h07) begin
-                // F12 -> Pause core and credits
-                irq         <= 1'b0;
-                keycode     <= 8'h00;
-                break_flag  <= 1'b0;
-                pause_core <= break_flag ? ~pause_core : pause_core;
-            end
+            // F11 (0x78) / F12 (0x07) are not intercepted in this port (see the header
+            // note); they fall through below and pass to the guest as normal keys.
             else if (pause_core) begin
                 // The core is paused and the credits are visible
                 irq         <= 1'b0;
