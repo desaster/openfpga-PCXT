@@ -1,19 +1,19 @@
 //
-// Pocket keyboard: merge controller buttons and a docked USB keyboard onto the
-// single PS/2 device that CHIPSET's KFPS2KB receives.
+// Pocket keyboard: merge controller buttons, a docked USB keyboard, and the
+// on-screen virtual keyboard into one Set-2 scancode byte stream for CHIPSET's
+// KFPS2KB.
 //
-// KFPS2KB is a real PS/2 serial device, so all input sources must share one
-// serialised output. Three event producers - the cont1_key button map,
-// hid_to_ps2 over the docked USB keyboard (cont3_*), and the on-screen virtual
-// keyboard (vkb_*) - push key events into a small queue; a framer drains it,
-// emitting each as a make ([code]) or break ([0xF0, code]), with a 0xE0 prefix for
-// extended keys, into the ps2_device serialiser.
+// Three event producers - the cont1_key button map, hid_to_ps2 over the docked
+// USB keyboard (cont3_*), and the virtual keyboard (vkb_*) - push key events into
+// a small queue; a framer drains it, handing KFPS2KB each byte over a ready/valid
+// handshake as a make ([code]) or break ([0xF0, code]), with a 0xE0 prefix for
+// extended keys. kb_ready paces one byte at a time.
 //
 // Scancodes are Set-2 (KFPS2KB converts Set-2 -> XT).
 //
 
 module pocket_keyboard (
-    input        clk,          // clk_chipset (50 MHz) = ps2_device clk_sys
+    input        clk,          // clk_chipset (50 MHz)
     input        reset,
     input [15:0] buttons,      // cont1_key
     input        gamepad,      // 1 = joystick mode: buttons drive the game port, not keys
@@ -28,58 +28,11 @@ module pocket_keyboard (
     input [15:0] cont3_trig,   // docked USB: HID usage codes 5-6
     input [15:0] cont3_key,    // docked USB: modifier bits (byte [15:8])
 
-    // host -> device from CHIPSET (idle high); device -> host into CHIPSET
-    input        ps2_clk_host,
-    input        ps2_dat_host,
-    output       ps2_clk_dev,
-    output       ps2_dat_dev
+    // Set-2 scancode byte to CHIPSET's KFPS2KB; kb_ready gates one byte at a time
+    output [7:0] kb_byte,
+    output       kb_valid,
+    input        kb_ready
 );
-
-    //
-    // PS/2 bit-clock timebase: PS2DIV=2000 @ 50 MHz -> ~12.5 kHz, the rate
-    // KFPS2KB_Shift_Register is proven against.
-    //
-    localparam [11:0] PS2DIV = 12'd2000;
-    reg         clk_ps2 = 1'b0;
-    reg  [11:0] ps2_cnt  = 12'd0;
-
-    always @(posedge clk) begin
-        if (reset) begin
-            clk_ps2 <= 1'b0;
-            ps2_cnt <= 12'd0;
-        end else if (ps2_cnt == PS2DIV) begin
-            clk_ps2 <= ~clk_ps2;
-            ps2_cnt <= 12'd0;
-        end else begin
-            ps2_cnt <= ps2_cnt + 12'd1;
-        end
-    end
-
-    //
-    // Serialiser. The TX FIFO drains slowly and has no full-guard, so the framer paces
-    // its writes against occupancy (tx_credit). rx_full blocks TX writes while a host
-    // byte is pending; rd auto-drains it so the BIOS reset command (0xFF) can't wedge it.
-    //
-    localparam PS2_FIFO_BITS = 4;   // TX FIFO depth = 2**bits
-    reg  [7:0] wdata;
-    reg        we;
-    wire [8:0] rdata;
-    wire       rx_full = rdata[8];
-    wire       tx_empty;
-
-    ps2_device #(.PS2_FIFO_BITS(PS2_FIFO_BITS)) u_ps2_device (
-        .clk_sys     (clk),
-        .wdata       (wdata),
-        .we          (we),
-        .ps2_clk     (clk_ps2),
-        .ps2_clk_out (ps2_clk_dev),
-        .ps2_dat_out (ps2_dat_dev),
-        .tx_empty    (tx_empty),
-        .ps2_clk_in  (ps2_clk_host),
-        .ps2_dat_in  (ps2_dat_host),
-        .rdata       (rdata),
-        .rd          (rdata[8])
-    );
 
     //
     // Source A: controller buttons. Synchronise cont1_key, then scan the mapped bits
@@ -109,17 +62,31 @@ module pocket_keyboard (
                                               8'h5A;   // Start  -> Enter
 
     //
-    // Source B: docked USB keyboard. Synchronise cont3_* into the clk domain and
-    // convert to ps2_key events {strobe, pressed, 1'b0, code[7:0]}.
+    // Source B: docked USB keyboard. Synchronise cont3_* from the clk_74a bridge domain,
+    // then hand hid_to_ps2 the report only after it has held steady for a few cycles.
+    // A raw per-bit crossing can latch a key transition mid-settle (bits resolving
+    // old-or-new independently) or straddle the bridge's non-atomic per-bus update; since
+    // hid_to_ps2 edge-detects the report, such a transient would post a phantom scancode.
     //
-    reg [31:0] joy_s0, joy_s;
-    reg [15:0] trig_s0, trig_s;
-    reg [15:0] key_s0, key_s;
+    reg [31:0] joy_s0, joy_s1, joy_s;
+    reg [15:0] trig_s0, trig_s1, trig_s;
+    reg [15:0] key_s0, key_s1, key_s;
+    reg  [2:0] rpt_stable;
+    wire       rpt_steady = (joy_s0 == joy_s1) && (trig_s0 == trig_s1) && (key_s0 == key_s1);
 
     always @(posedge clk) begin
-        joy_s0  <= cont3_joy;  joy_s  <= joy_s0;
-        trig_s0 <= cont3_trig; trig_s <= trig_s0;
-        key_s0  <= cont3_key;  key_s  <= key_s0;
+        joy_s0  <= cont3_joy;  joy_s1  <= joy_s0;
+        trig_s0 <= cont3_trig; trig_s1 <= trig_s0;
+        key_s0  <= cont3_key;  key_s1  <= key_s0;
+        if (!rpt_steady)
+            rpt_stable <= 3'd0;
+        else if (rpt_stable != 3'd4)
+            rpt_stable <= rpt_stable + 3'd1;
+        else begin
+            joy_s  <= joy_s1;
+            trig_s <= trig_s1;
+            key_s  <= key_s1;
+        end
     end
 
     wire [10:0] usb_key;
@@ -148,6 +115,9 @@ module pocket_keyboard (
     reg  usb_stb_d;
     reg  vkb_stb_d;
     wire btn_change = (btn_s[btn_idx] != btn_prev[btn_idx]);
+    // Single mailbox: if hid_to_ps2 emits two events on consecutive cycles (e.g. two
+    // modifiers) while the writer is busy, the first is overwritten. Rare; a modifier
+    // break lost this way self-corrects on the next press.
     wire usb_pend   = (usb_key[10] != usb_stb_d);
     wire vkb_pend   = (vkb_stb != vkb_stb_d);
 
@@ -156,9 +126,7 @@ module pocket_keyboard (
             btn_s0 <= 10'd0; btn_s <= 10'd0; btn_prev <= 10'd0; btn_mask <= 10'd0; btn_idx <= 4'd0;
             usb_stb_d <= 1'b0; vkb_stb_d <= 1'b0; q_wr <= {QW{1'b0}};
         end else begin
-            // Start/Select stay live in joystick mode; D-pad + A/B/X/Y are gated off.
-            // While the virtual keyboard is open every controller key is suppressed,
-            // and any button still held when it closes stays masked until released.
+            // OSD open: gate all keys and hold still-down buttons masked until released.
             btn_s0   <= osd_active ? 10'd0 : (btn_gated & ~btn_mask);
             btn_s    <= btn_s0;
             btn_mask <= osd_active ? btn_gated : (btn_mask & btn_gated);
@@ -186,13 +154,12 @@ module pocket_keyboard (
     end
 
     //
-    // Frame: pop an event and write it as a make ([code]) or break ([0xF0, code]), with a
-    // 0xE0 prefix for extended keys. we is a one-cycle pulse; the !we guard separates bytes.
+    // Frame: pop an event and emit it as a make ([code]) or break ([0xF0, code]), with a
+    // 0xE0 prefix for extended keys, one byte per kb_ready handshake.
     //
     localparam [2:0] S_IDLE = 3'd0, S_PREFIX = 3'd1, S_CODE = 3'd2, S_E0 = 3'd3, S_SEQ = 3'd4;
     reg [2:0] fst;
     reg [7:0] f_code;
-    reg       f_ext;    // current event is E0-extended
     reg       f_make;   // current event is a make (vs break)
 
     // Print Screen (0xE2) and Pause (0xE1) sentinels expand to these byte sequences; S_SEQ
@@ -227,11 +194,6 @@ module pocket_keyboard (
         endcase
     endfunction
 
-    // Outstanding TX FIFO bytes since it last drained (tx_empty); tx_room is clear once
-    // this reaches the depth, withholding further writes.
-    reg  [PS2_FIFO_BITS:0] tx_credit;
-    wire tx_room = (tx_credit < ((1 << PS2_FIFO_BITS) - 1));
-
     //
     // Typematic repeat. A real PS/2 keyboard resends the held key's make after an
     // initial delay, then at a steady rate; there is no host to do that here, so
@@ -261,20 +223,21 @@ module pocket_keyboard (
                              (q_head[7:0] != 8'hE1) &&  // not Pause (sequence)
                              (q_head[7:0] != 8'hE2);    // not Print Screen (sequence)
 
+    // Byte handed to KFPS2KB, valid in the emit states; kb_ready completes the
+    // handshake and advances the framer.
+    assign kb_valid = (fst == S_E0) || (fst == S_PREFIX) || (fst == S_CODE) ||
+                      (fst == S_SEQ && seq_rom(seq_addr) != 8'h00);
+    assign kb_byte  = (fst == S_E0)     ? 8'hE0 :
+                      (fst == S_PREFIX)  ? 8'hF0 :
+                      (fst == S_SEQ)     ? seq_rom(seq_addr) :
+                                           f_code;
+
     always @(posedge clk) begin
         if (reset) begin
-            fst <= S_IDLE; q_rd <= {QW{1'b0}}; we <= 1'b0; wdata <= 8'd0; f_code <= 8'd0;
-            f_ext <= 1'b0; f_make <= 1'b0; seq_addr <= 5'd0; tx_credit <= 0;
+            fst <= S_IDLE; q_rd <= {QW{1'b0}}; f_code <= 8'd0;
+            f_make <= 1'b0; seq_addr <= 5'd0;
             rep_code <= 8'd0; rep_ext <= 1'b0; rep_hold <= 1'b0; rep_started <= 1'b0; rep_timer <= 25'd0;
         end else begin
-            we <= 1'b0;   // default: one-cycle write pulses
-
-            // TX FIFO occupancy: one more byte per write, cleared on a full drain.
-            if (tx_empty)
-                tx_credit <= we ? 1'b1 : 1'b0;
-            else if (we)
-                tx_credit <= tx_credit + 1'b1;
-
             // Repeat timer counts while a key is held; S_IDLE restarts it on each
             // make or reissue.
             if (!rep_hold)
@@ -286,7 +249,6 @@ module pocket_keyboard (
                 S_IDLE: begin
                     if (!q_empty) begin
                         f_code <= q_head[7:0];
-                        f_ext  <= q_head[9];
                         f_make <= q_head[8];
                         q_rd   <= q_rd + 1'b1;
                         if (q_head[7:0] == 8'hE2) begin          // Print Screen sequence
@@ -309,7 +271,6 @@ module pocket_keyboard (
                         end
                     end else if (rep_due) begin                  // reissue the held make
                         f_code      <= rep_code;
-                        f_ext       <= rep_ext;
                         f_make      <= 1'b1;
                         fst         <= rep_ext ? S_E0 : S_CODE;
                         rep_started <= 1'b1;
@@ -318,39 +279,25 @@ module pocket_keyboard (
                 end
 
                 S_E0: begin                  // extended: emit 0xE0 first
-                    if (!rx_full && tx_room) begin
-                        wdata <= 8'hE0;
-                        we    <= 1'b1;
-                        fst   <= f_make ? S_CODE : S_PREFIX;
-                    end
+                    if (kb_ready)
+                        fst <= f_make ? S_CODE : S_PREFIX;
                 end
 
                 S_PREFIX: begin              // break: emit 0xF0
-                    if (!we && !rx_full && tx_room) begin
-                        wdata <= 8'hF0;
-                        we    <= 1'b1;
-                        fst   <= S_CODE;
-                    end
+                    if (kb_ready)
+                        fst <= S_CODE;
                 end
 
                 S_CODE: begin                // emit the key code
-                    if (!we && !rx_full && tx_room) begin
-                        wdata <= f_code;
-                        we    <= 1'b1;
-                        fst   <= S_IDLE;
-                    end
+                    if (kb_ready)
+                        fst <= S_IDLE;
                 end
 
                 S_SEQ: begin                 // walk a fixed scancode sequence (PrtSc/Pause)
-                    if (!we && !rx_full && tx_room) begin
-                        if (seq_rom(seq_addr) == 8'h00)
-                            fst <= S_IDLE;
-                        else begin
-                            wdata    <= seq_rom(seq_addr);
-                            we       <= 1'b1;
-                            seq_addr <= seq_addr + 1'b1;
-                        end
-                    end
+                    if (seq_rom(seq_addr) == 8'h00)
+                        fst <= S_IDLE;
+                    else if (kb_ready)
+                        seq_addr <= seq_addr + 1'b1;
                 end
 
                 default: fst <= S_IDLE;

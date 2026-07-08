@@ -764,7 +764,6 @@ set_global_assignment -name VERILOG_FILE core/core_bridge_cmd.v
 set_global_assignment -name SYSTEMVERILOG_FILE core/data_loader.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/sound_i2s.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/sync_fifo.sv
-set_global_assignment -name SYSTEMVERILOG_FILE core/ps2_device.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/hid_to_ps2.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pocket_keyboard.sv
 
@@ -796,8 +795,7 @@ set_global_assignment -name QIP_FILE core/sound/jt89/hdl/jt89.qip
 set_global_assignment -name QIP_FILE core/sound/jtopl/hdl/jtopl2.qip
 set_global_assignment -name QIP_FILE core/8088/8088.qip
 set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/KFSDRAM/HDL/KFSDRAM.sv"
-set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/KFPS2KB/HDL/KFPS2KB_Shift_Register.sv"
-set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/KFPS2KB/HDL/KFPS2KB_Send_Data.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/KFPS2KB/HDL/KFPS2KB_Byte_Accept.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/KFPS2KB/HDL/KFPS2KB.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/KFPS2KB/HDL/Tandy_Scancode_Converter.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/KF8288/HDL/KF8288.sv"

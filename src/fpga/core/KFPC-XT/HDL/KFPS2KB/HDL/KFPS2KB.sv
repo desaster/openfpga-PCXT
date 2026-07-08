@@ -9,15 +9,14 @@
 // as normal keycodes; this port does not repurpose them. swap_video / pause_core stay at
 // their reset values (unused here).
 //
-module KFPS2KB #(
-    parameter over_time = 16'd1000
-) (
+module KFPS2KB (
     input   logic           clock,
-    input   logic           peripheral_ce,
     input   logic           reset,
 
-    input   logic           device_clock,
-    input   logic           device_data,
+    // Set-2 scancode byte in
+    input   logic   [7:0]   kb_byte,
+    input   logic           kb_valid,
+    output  logic           kb_ready,
 
     output  logic           irq,
     output  logic   [7:0]   keycode,
@@ -37,18 +36,17 @@ module KFPS2KB #(
 
 
     //
-    // Shift register
+    // Byte front-end (parallel Set-2 in)
     //
-    KFPS2KB_Shift_Register #(
-        .over_time      (over_time)
-    ) u_Shift_Register (
+    KFPS2KB_Byte_Accept u_Byte_Accept (
         .clock              (clock),
-        .peripheral_ce      (peripheral_ce),
         .reset              (reset),
 
-        .device_clock       (device_clock),
-        .device_data        (device_data),
+        .kb_byte            (kb_byte),
+        .kb_valid           (kb_valid),
+        .kb_ready           (kb_ready),
 
+        .irq                (irq),
         .register           (register),
         .recieved_flag      (recieved_flag),
         .error_flag         (error_flag)

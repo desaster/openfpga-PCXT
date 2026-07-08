@@ -3,7 +3,7 @@
 //
 // Converts an Analogue Pocket docked USB keyboard (6 concurrent HID usage codes
 // + a modifier byte, packed into cont3_*) into ps2_key events
-// {strobe, pressed, 1'b0, code[7:0]}. The HID-usage -> Set-2 mapping follows the
+// {strobe, pressed, ext, code[7:0]}. The HID-usage -> Set-2 mapping follows the
 // public USB HID Keyboard and PS/2 Set-2 specifications.
 //
 // Within one report, modifier makes are emitted before key makes and key breaks
@@ -17,7 +17,7 @@ module hid_to_ps2
 	input      [31:0] joy,     // cont3_joy
 	input      [15:0] trig,    // cont3_trig
 	input       [7:0] mods,    // modifier byte
-	output reg [10:0] ps2_key  // {strobe, pressed, 1'b0, code[7:0]}
+	output reg [10:0] ps2_key  // {strobe, pressed, ext, code[7:0]}
 );
 
 reg [47:0] prev_raw;

@@ -305,11 +305,10 @@ module core_top (
     wire [63:0] status = 64'h0000_0000_0000_0080;
     wire [7:0]  xtctl;
 
-    //Keyboard Ps2
-    wire        ps2_kbd_clk_out;
-    wire        ps2_kbd_data_out;
-    wire        ps2_kbd_clk_in;
-    wire        ps2_kbd_data_in;
+    // Keyboard: parallel Set-2 byte handshake into CHIPSET
+    wire  [7:0] kb_byte;
+    wire        kb_valid;
+    wire        kb_ready;
 
     //Mouse PS2
     wire        ps2_mouse_clk_out;
@@ -384,7 +383,7 @@ module core_top (
     assign buttons            = 2'b00;
 
     // Keyboard driven by pocket_keyboard (instantiated below, near CHIPSET);
-    // it sources ps2_kbd_clk_in / ps2_kbd_data_in. Mouse input idle.
+    // it hands Set-2 bytes to CHIPSET over kb_byte/kb_valid/kb_ready. Mouse input idle.
     assign ps2_mouse_clk_out  = 1'b1;   // CHIPSET mouse input, idle
     assign ps2_mouse_data_out = 1'b1;
     // joy0 bits: [5]=fire2 [4]=fire1 [3]=up [2]=down [1]=left [0]=right. Held off while
@@ -1329,48 +1328,6 @@ module core_top (
         end
     end
 
-    //
-    // Input F/F PS2_CLK
-    //
-    logic   device_clock_ff;
-    logic   device_clock;
-
-    always_ff @(negedge clk_chipset, posedge reset)
-    begin
-        if (reset)
-        begin
-            device_clock_ff <= 1'b0;
-            device_clock    <= 1'b0;
-        end
-        else
-        begin
-            device_clock_ff <= ps2_kbd_clk_in;
-            device_clock    <= device_clock_ff ;
-        end
-    end
-
-
-    //
-    // Input F/F PS2_DAT
-    //
-    logic   device_data_ff;
-    logic   device_data;
-
-    always_ff @(negedge clk_chipset, posedge reset)
-    begin
-        if (reset)
-        begin
-            device_data_ff <= 1'b0;
-            device_data    <= 1'b0;
-        end
-        else
-        begin
-            device_data_ff <= ps2_kbd_data_in;
-            device_data    <= device_data_ff;
-        end
-    end
-
-
     wire [7:0] data_bus;
     wire INTA_n;
     wire [19:0] cpu_ad_out;
@@ -1417,9 +1374,9 @@ module core_top (
     end
 
     //
-    // Keyboard: controller buttons + docked USB keyboard -> one PS/2 device ->
-    // CHIPSET. Drives the ps2_kbd_*_in lines feeding the device_clock/device_data
-    // synchronisers above; replaces the former idle-high tie-offs.
+    // Keyboard: controller buttons + docked USB keyboard + virtual keyboard ->
+    // one Set-2 byte stream handed to CHIPSET's KFPS2KB over kb_byte/kb_valid,
+    // paced by kb_ready.
     //
     pocket_keyboard u_pocket_keyboard (
         .clk          (clk_chipset),
@@ -1436,10 +1393,9 @@ module core_top (
         .cont3_joy    (cont3_joy),
         .cont3_trig   (cont3_trig),
         .cont3_key    (cont3_key),
-        .ps2_clk_host (ps2_kbd_clk_out),
-        .ps2_dat_host (ps2_kbd_data_out),
-        .ps2_clk_dev  (ps2_kbd_clk_in),
-        .ps2_dat_dev  (ps2_kbd_data_in)
+        .kb_byte      (kb_byte),
+        .kb_valid     (kb_valid),
+        .kb_ready     (kb_ready)
     );
 
     CHIPSET #(.clk_rate(cur_rate)) u_CHIPSET
@@ -1509,10 +1465,9 @@ module core_top (
 		.port_c_in                          (port_c_in),
 		.port_b_in                          (port_b_out),
 		.speaker_out                        (speaker_out),
-		.ps2_clock                          (device_clock),
-		.ps2_data                           (device_data),
-		.ps2_clock_out                      (ps2_kbd_clk_out),
-		.ps2_data_out                       (ps2_kbd_data_out),
+		.kb_byte                            (kb_byte),
+		.kb_valid                           (kb_valid),
+		.kb_ready                           (kb_ready),
 		.ps2_mouseclk_in                    (ps2_mouse_clk_out),
 		.ps2_mousedat_in                    (ps2_mouse_data_out),
 		.ps2_mouseclk_out                   (ps2_mouse_clk_in),

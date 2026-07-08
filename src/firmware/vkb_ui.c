@@ -10,10 +10,10 @@
 #define MOVE_COOLDOWN (CLK_FREQ / 25) // debounce between moves
 #define BTN_DPAD      (BTN_UP | BTN_DOWN | BTN_LEFT | BTN_RIGHT)
 
-// PS/2 output serialises at ~12.5 kHz, about 0.88 ms per byte; a break is two bytes.
-// Emitting a burst of breaks (clearing many latches at once) faster than the wire
-// drains overflows pocket_keyboard's event queue and drops keys, leaving them stuck
-// down in the guest. Space each break by one break's worth of drain time.
+// KFPS2KB accepts one Set-2 byte per ~0.88 ms (1136/s); a break is two bytes. Emitting
+// a burst of breaks (clearing many latches at once) faster than that overflows
+// pocket_keyboard's event queue and drops keys, leaving them stuck down. Pace each break
+// by two byte-times; keep this in step with KFPS2KB's inter-byte PACE.
 #define PS2_BREAK_CYCLES (2u * CLK_FREQ / 1136u)
 
 static inline uint32_t rdcycle(void)
@@ -149,8 +149,8 @@ void vkb_ui_init(void)
     vkb_draw_keyboard(&osd, cur_key);
 }
 
-// Busy-wait one break's worth of PS/2 drain time so a batch of breaks cannot
-// outrun the wire (see PS2_BREAK_CYCLES).
+// Busy-wait one break (two byte-times) so a batch of breaks cannot outpace KFPS2KB's
+// byte rate and overflow pocket_keyboard's queue (see PS2_BREAK_CYCLES).
 static void vkb_pace_break(void)
 {
     uint32_t deadline = rdcycle() + PS2_BREAK_CYCLES;
@@ -265,7 +265,7 @@ void vkb_ui_tick(void)
         if (pressed & BTN_Y) { // clear every latched key
             vkb_clear_latches();
         }
-        // A momentarily presses a non-latched key; the PS/2 framer repeats it while held.
+        // A momentarily presses a non-latched key; typematic then repeats it while held.
         if ((pressed & BTN_A) && !is_latched(cur_key)) {
             vkb_emit(1, vkb_keys[cur_key].scancode);
             held_key = cur_key;

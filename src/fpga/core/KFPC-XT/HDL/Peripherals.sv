@@ -90,10 +90,9 @@ module PERIPHERALS #(
         input   logic   [7:0]   port_c_in,
         output  logic   [7:0]   port_c_out,
         output  logic   [7:0]   port_c_io,
-        input   logic           ps2_clock,
-        input   logic           ps2_data,
-        output  logic           ps2_clock_out,
-        output  logic           ps2_data_out,
+        input   logic   [7:0]   kb_byte,
+        input   logic           kb_valid,
+        output  logic           kb_ready,
         input   logic           ps2_mouseclk_in,
         input   logic           ps2_mousedat_in,
         output  logic           ps2_mouseclk_out,
@@ -443,16 +442,12 @@ module PERIPHERALS #(
     //
     // KFPS2KB
     //
-    logic           ps2_send_clock;
     logic           keybord_irq;
     logic           uart_irq;
     logic           uart2_irq;
     logic   [7:0]   keycode_buf;
     logic   [7:0]   keycode;
     logic   [7:0]   tandy_keycode_conv;
-    logic           prev_ps2_reset;
-    logic           prev_ps2_reset_n;
-    logic           lock_recv_clock;
     logic           swap_video_buffer_1;
     logic           swap_video_buffer_2;
     localparam [15:0] OPL_WARM_RESET_HOLD = 16'd5000;
@@ -465,24 +460,16 @@ module PERIPHERALS #(
     wire    clear_keycode = port_b_out[7];
     wire    ps2_reset_n   = ~tandy_video ? port_b_out[6] : 1'b1;
 
-    always_ff @(posedge clock, posedge reset)
-    begin
-        if (reset)
-            prev_ps2_reset_n <= 1'b0;
-        else
-            prev_ps2_reset_n <= ps2_reset_n;
-    end
-
-    KFPS2KB u_KFPS2KB 
+    KFPS2KB u_KFPS2KB
     (
         // Bus
         .clock                      (clock),
-        .peripheral_ce              (peripheral_ce),
         .reset                      (reset),
 
-        // PS/2 I/O
-        .device_clock               (ps2_clock | lock_recv_clock),
-        .device_data                (ps2_data),
+        // Set-2 byte in
+        .kb_byte                    (kb_byte),
+        .kb_valid                   (kb_valid),
+        .kb_ready                   (kb_ready),
 
         // I/O
         .irq                        (keybord_irq),
@@ -534,25 +521,6 @@ module PERIPHERALS #(
         end
     end
 
-    // Keyboard reset
-    KFPS2KB_Send_Data u_KFPS2KB_Send_Data 
-    (
-        // Bus
-        .clock                      (clock),
-        .peripheral_ce              (peripheral_ce),
-        .reset                      (reset),
-
-        // PS/2 I/O
-        .device_clock               (ps2_clock),
-        .device_clock_out           (ps2_send_clock),
-        .device_data_out            (ps2_data_out),
-        .sending_data_flag          (lock_recv_clock),
-
-        // I/O
-        .send_request               (~prev_ps2_reset_n & ps2_reset_n),
-        .send_data                  (8'hFF)
-    );
-
     // Convert Tandy scancode
     Tandy_Scancode_Converter u_Tandy_Scancode_Converter 
     (
@@ -563,14 +531,6 @@ module PERIPHERALS #(
         .convert_data               (tandy_keycode_conv)
     );
     wire [7:0] tandy_keycode = `ENABLE_TANDY_KBD ? tandy_keycode_conv : keycode;
-
-    always_ff @(posedge clock, posedge reset)
-    begin
-        if (reset)
-            ps2_clock_out = 1'b1;
-        else
-            ps2_clock_out = ~(keybord_irq | ~ps2_send_clock | ~ps2_reset_n);
-    end
 
     always_ff @(posedge clk_vga_hgc)
     begin
