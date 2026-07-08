@@ -105,15 +105,18 @@ module softcpu_subsystem (
     // Reset PC is the recovery if it somehow does.
     wire        cpu_trap;
 
+    // The built-in timer interrupt drives the OSD service (see the firmware irq handler),
+    // so a disk transfer can block without starving the keyboard. No external IRQ lines.
     picorv32 #(
         .COMPRESSED_ISA(0),
-        .ENABLE_IRQ(0),
+        .ENABLE_IRQ(1),
         .ENABLE_MUL(1),
         .ENABLE_DIV(1)
     ) pico (
         .clk       (clk_pico),
         .resetn    (~reset),
         .trap      (cpu_trap),
+        .irq       (32'd0),
         .mem_valid (cpu_mem_valid),
         .mem_instr (cpu_mem_instr),
         .mem_ready (cpu_mem_ready),

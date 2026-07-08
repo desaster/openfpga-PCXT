@@ -9,6 +9,13 @@
 #include "softcpu_regs.h"
 #include "vkb_ui.h"
 
+// The OSD runs from a periodic timer interrupt (see irq() and start.S) so blocking disk
+// transfers cannot starve it. ~1 ms at the 8.33 MHz softcore clock.
+#define TIMER_PERIOD 8333u
+
+extern void timer_start(uint32_t cycles);
+extern void irq_mask(uint32_t mask);
+
 // Read a disk-size register twice and return it only if the samples agree, else 0. The
 // size crosses clock domains per-bit and can tear as it changes from 0 to the image size;
 // two matching reads reject a half-updated value, and the caller retries on the next poll.
@@ -25,6 +32,11 @@ int main(void)
     // unless) an image mounts; this also clears a stale-present state after a reset.
     ide_init();
     vkb_ui_init();
+
+    // Arm the timer and enable only its interrupt (bit 0); the fault interrupts stay
+    // masked so an illegal instruction still traps rather than looping in irq().
+    timer_start(TIMER_PERIOD);
+    irq_mask(0xFFFFFFFEu);
 
     uint32_t mounted_a = 0;
     uint32_t mounted_b = 0;
@@ -65,8 +77,17 @@ int main(void)
         if (mounted_hdd || mounted_hdd_b) {
             ide_poll();
         }
-        vkb_ui_tick();
     }
 
     return 0;
+}
+
+// Timer interrupt handler: re-arm the timer, service the OSD, and return the saved
+// context unchanged.
+uint32_t *irq(uint32_t *regs, uint32_t irq_bits)
+{
+    (void) irq_bits;
+    timer_start(TIMER_PERIOD);
+    vkb_ui_tick();
+    return regs;
 }
