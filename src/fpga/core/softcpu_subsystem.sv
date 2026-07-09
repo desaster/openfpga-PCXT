@@ -340,13 +340,59 @@ module softcpu_subsystem (
     wire [31:0] ram_rdata = {ram3_q, ram2_q, ram1_q, ram0_q};
 
     //
-    // OSD framebuffer: full-screen 640x200 at 4bpp (two pixels per byte), four byte lanes. The
-    // GPU owns the write port (Port A, clk_sys); Port B reads it for the overlay (clk_pix).
+    // OSD framebuffer: full-screen 640x200 at 4bpp (two pixels per byte), four byte lanes. Each
+    // lane is one true-dual-port M10K: Port A (clk_sys) is the GPU's read-modify-write, Port B
+    // (clk_pix) is the scanout read, both one-cycle reads (unregistered output over the registered
+    // address).
     //
-    reg [7:0] fb0 [0:16383];
-    reg [7:0] fb1 [0:16383];
-    reg [7:0] fb2 [0:16383];
-    reg [7:0] fb3 [0:16383];
+    wire [7:0] pa_q [0:3];   // Port A read data per lane (GPU read-modify-write)
+    wire [7:0] fbq [0:3];    // Port B read data per lane (scanout)
+
+    genvar fbl;
+    generate
+        for (fbl = 0; fbl < 4; fbl = fbl + 1) begin : fb_lane
+            altsyncram #(
+                .operation_mode ("BIDIR_DUAL_PORT"),
+                .width_a        (8),
+                .widthad_a      (14),
+                .numwords_a     (16384),
+                .width_b        (8),
+                .widthad_b      (14),
+                .numwords_b     (16384),
+                .address_reg_b  ("CLOCK1"),
+                .outdata_reg_a  ("UNREGISTERED"),
+                .outdata_reg_b  ("UNREGISTERED"),
+                .lpm_type       ("altsyncram"),
+                .intended_device_family ("Cyclone V")
+            ) fb (
+                .clock0    (clk_sys),
+                .address_a (pa_addr),
+                .data_a    (pa_wd),
+                .wren_a    (pa_we[fbl]),
+                .q_a       (pa_q[fbl]),
+
+                .clock1    (clk_pix),
+                .address_b (osd_word_addr),
+                .data_b    (8'd0),
+                .wren_b    (1'b0),
+                .q_b       (fbq[fbl]),
+
+                .aclr0 (1'b0),
+                .aclr1 (1'b0),
+                .addressstall_a (1'b0),
+                .addressstall_b (1'b0),
+                .byteena_a (1'b1),
+                .byteena_b (1'b1),
+                .clocken0 (1'b1),
+                .clocken1 (1'b1),
+                .clocken2 (1'b1),
+                .clocken3 (1'b1),
+                .eccstatus (),
+                .rden_a (1'b1),
+                .rden_b (1'b1)
+            );
+        end
+    endgenerate
 
     localparam [15:0] OSD_STRIDE = 16'd320; // framebuffer bytes per row (640 / 2)
 
@@ -455,11 +501,8 @@ module softcpu_subsystem (
     initial $readmemh("../firmware/font/font_8x8.vh", font_rom);
     reg [7:0] font_q;                 // current glyph row, registered like the framebuffer read
 
-    reg [7:0] pa_q0, pa_q1, pa_q2, pa_q3;
     wire [1:0]  cur_lane = baddr[1:0];
-    wire [7:0]  cur_byte = (cur_lane == 2'd0) ? pa_q0 :
-                           (cur_lane == 2'd1) ? pa_q1 :
-                           (cur_lane == 2'd2) ? pa_q2 : pa_q3;
+    wire [7:0]  cur_byte = pa_q[cur_lane];   // Port A read of the current lane
     // CHAR paints a glyph's lit pixels in the foreground colour and, when not transparent, the
     // rest in the background; FILL and OUTLINE paint their single colour.
     wire       font_bit = font_q[3'd7 - gx];
@@ -480,16 +523,9 @@ module softcpu_subsystem (
     wire  [3:0] pa_we   = (gs == GS_WR && draw_px) ? (4'd1 << cur_lane) : 4'd0;
     wire  [7:0] pa_wd   = fill_byte ? {draw_col, draw_col} : cur_byte_mod;
 
-    // Framebuffer Port A (GPU read/write) and font ROM read, clk_sys, registered (one cycle).
+    // Font ROM read, clk_sys, registered one cycle to match the framebuffer Port A read latency so
+    // the glyph row and cur_byte arrive together.
     always @(posedge clk_sys) begin
-        if (pa_we[0]) fb0[pa_addr] <= pa_wd;
-        if (pa_we[1]) fb1[pa_addr] <= pa_wd;
-        if (pa_we[2]) fb2[pa_addr] <= pa_wd;
-        if (pa_we[3]) fb3[pa_addr] <= pa_wd;
-        pa_q0 <= fb0[pa_addr];
-        pa_q1 <= fb1[pa_addr];
-        pa_q2 <= fb2[pa_addr];
-        pa_q3 <= fb3[pa_addr];
         font_q <= font_rom[{gs_glyph, gy}];
     end
 
@@ -565,31 +601,18 @@ module softcpu_subsystem (
     wire [15:0] osd_byte_addr = osd_y[7:0] * 16'd320 + {7'd0, osd_x[9:1]};  // y*320 + x/2
     wire [13:0] osd_word_addr = osd_byte_addr[15:2];
 
-    // Port B: registered read in the video clock domain; lane/nibble/area
-    // selectors are pipelined one stage to match the read latency.
-    reg [7:0] fb0_qb, fb1_qb, fb2_qb, fb3_qb;
+    // Port B scanout is the altsyncram's clk_pix side (one-cycle read); the lane/nibble/area
+    // selectors are pipelined one stage to match it.
     reg [1:0] osd_lane_r;
     reg       osd_nib_r;
     reg       osd_in_area_r;
     always @(posedge clk_pix) begin
-        fb0_qb <= fb0[osd_word_addr];
-        fb1_qb <= fb1[osd_word_addr];
-        fb2_qb <= fb2[osd_word_addr];
-        fb3_qb <= fb3[osd_word_addr];
         osd_lane_r    <= osd_byte_addr[1:0];
         osd_nib_r     <= osd_x[0];
         osd_in_area_r <= osd_in_bounds;
     end
 
-    reg [7:0] osd_byte;
-    always_comb begin
-        case (osd_lane_r)
-            2'd0:    osd_byte = fb0_qb;
-            2'd1:    osd_byte = fb1_qb;
-            2'd2:    osd_byte = fb2_qb;
-            default: osd_byte = fb3_qb;
-        endcase
-    end
+    wire [7:0] osd_byte = fbq[osd_lane_r];
 
     assign osd_palette_idx = osd_nib_r ? osd_byte[3:0] : osd_byte[7:4];
     assign osd_in_area     = osd_in_area_r;
