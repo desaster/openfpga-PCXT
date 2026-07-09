@@ -1905,7 +1905,7 @@ module core_top (
         // input image
         .HB         ( HBlank  ),
         .VB         ( VBlank ),
-        .rgb_in     ( credits_mode_pix ? 24'd0 : {tr, tg, tb} ),
+        .rgb_in     ( {tr, tg, tb} ),   // live picture; the credits dim it behind the scrolling text
         .rotate     ( 2'd0  ),
         .toggle     ( 1'b0  ),
         .fast_scroll( 1'b0  ),
