@@ -136,23 +136,16 @@ module softcpu_subsystem (
     wire sel_fdd    = cpu_mem_valid && (cpu_mem_addr[31:28] == 4'h3);
     wire sel_fb     = cpu_mem_valid && (cpu_mem_addr[31:28] == 4'h4);
 
-    // OSD control at 0x20000004: bit0 = shown, bit1 = position (0 = low, 1 = high).
+    // OSD control at 0x20000004: bit0 = overlay shown. An overlay is positioned by where the
+    // firmware draws it in the full-screen framebuffer, so there is no compositor offset.
     reg osd_active_r = 1'b0;
-    reg osd_pos_r    = 1'b0;
     always @(posedge clk_pico) begin
-        if (reset) begin
+        if (reset)
             osd_active_r <= 1'b0;
-            osd_pos_r    <= 1'b0;
-        end else if (sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[3:2] == 2'd1) begin
+        else if (sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[3:2] == 2'd1)
             osd_active_r <= cpu_mem_wdata[0];
-            osd_pos_r    <= cpu_mem_wdata[1];
-        end
     end
     assign osd_active = osd_active_r;
-
-    // The position bit selects the vertical origin in the video clock domain.
-    wire osd_pos_pix;
-    synch_3 s_osd_pos_pix (osd_pos_r, osd_pos_pix, clk_pix);
 
     // Virtual-keyboard key event, written by the firmware at 0x20000008. The CPU
     // holds a store across two clk_pico cycles, so the write is edge-detected to
@@ -262,50 +255,230 @@ module softcpu_subsystem (
     wire [31:0] ram_rdata = {ram3_q, ram2_q, ram1_q, ram0_q};
 
     //
-    // OSD framebuffer: 636x81 at 4bpp (two pixels per byte), four byte lanes.
-    // Port A is the CPU read/write path (clk_pico) the firmware draws through;
-    // Port B reads it in the video clock domain for the overlay.
+    // OSD framebuffer: full-screen 640x200 at 4bpp (two pixels per byte), four byte lanes. The
+    // GPU owns the write port (Port A, clk_sys); Port B reads it for the overlay (clk_pix).
     //
-    reg [7:0] fb0 [0:8191];
-    reg [7:0] fb1 [0:8191];
-    reg [7:0] fb2 [0:8191];
-    reg [7:0] fb3 [0:8191];
+    reg [7:0] fb0 [0:16383];
+    reg [7:0] fb1 [0:16383];
+    reg [7:0] fb2 [0:16383];
+    reg [7:0] fb3 [0:16383];
 
-    // Port A: CPU read/write, clk_pico domain, registered read (one cycle).
-    wire [12:0] fb_word_addr = cpu_mem_addr[14:2];
-    reg [7:0] fb0_qa, fb1_qa, fb2_qa, fb3_qa;
+    localparam [15:0] OSD_STRIDE = 16'd320; // framebuffer bytes per row (640 / 2)
+
+    //
+    // OSD GPU. The CPU no longer writes pixels; it writes drawing commands at 0x4xxxxxxx
+    // (clk_pico) and a small FSM renders them into the framebuffer at clk_sys. Command
+    // registers:
+    //   0x40000000 XY   {y[15:0], x[15:0]}
+    //   0x40000004 WH   {h[15:0], w[15:0]}
+    //   0x40000008 FILL color[3:0]                  -> fill the XY/WH rectangle
+    //   0x40000010 STATUS (read) bit0 = busy
+    //   0x40000014 OUTLINE {round, color[3:0]}       -> outline the XY/WH rectangle
+    //   0x40000018 CHAR {transp, bg[3:0], fg[3:0], char[7:0]} -> 8x8 glyph at XY
+    // A launch write toggles gpu_req; the FSM acknowledges when the command completes.
+    // clk_pico is a gated clk_sys pulse, so the parameter registers are stable when the
+    // FSM samples them; req/ack cross the domains through two-flop synchronisers.
+    //
+    localparam [1:0] OP_FILL = 2'd0, OP_OUTLINE = 2'd1, OP_CHAR = 2'd2;
+
+    reg [15:0] gpu_x, gpu_y, gpu_w, gpu_h;
+    reg  [3:0] gpu_color;             // FILL/OUTLINE colour, or CHAR foreground
+    reg  [3:0] gpu_bg;                // CHAR background (drawn only when not transparent)
+    reg  [7:0] gpu_char;              // CHAR glyph index
+    reg  [1:0] gpu_op;
+    reg        gpu_round;             // OUTLINE: omit the four corner pixels (1px-rounded look)
+    reg        gpu_transp;            // CHAR: leave background pixels untouched
+    reg        gpu_req;
+    // A PicoRV32 store holds the bus for two clk_pico cycles, so a raw write select asserts
+    // twice. Committing on cpu_mem_ready (asserted only on the single accept cycle) fires each
+    // write once; the launch toggle is edge-detected on top of that so it can never cancel
+    // itself, which would leave req == ack, busy stuck low, and any command issued mid-draw
+    // dropped. FILL, OUTLINE and CHAR are launches.
+    wire gpu_cmd_wr = sel_fb && cpu_mem_wstrb[0] && cpu_mem_ready;
+    wire gpu_launch = gpu_cmd_wr && (cpu_mem_addr[4:2] == 3'd2 || cpu_mem_addr[4:2] == 3'd5 ||
+                                     cpu_mem_addr[4:2] == 3'd6);
+    reg  gpu_launch_d;
     always @(posedge clk_pico) begin
-        if (sel_fb) begin
-            if (cpu_mem_wstrb[0]) fb0[fb_word_addr] <= cpu_mem_wdata[7:0];
-            if (cpu_mem_wstrb[1]) fb1[fb_word_addr] <= cpu_mem_wdata[15:8];
-            if (cpu_mem_wstrb[2]) fb2[fb_word_addr] <= cpu_mem_wdata[23:16];
-            if (cpu_mem_wstrb[3]) fb3[fb_word_addr] <= cpu_mem_wdata[31:24];
-            fb0_qa <= fb0[fb_word_addr];
-            fb1_qa <= fb1[fb_word_addr];
-            fb2_qa <= fb2[fb_word_addr];
-            fb3_qa <= fb3[fb_word_addr];
+        if (reset) begin
+            gpu_req      <= 1'b0;
+            gpu_launch_d <= 1'b0;
+        end else begin
+            gpu_launch_d <= gpu_launch;
+            if (gpu_cmd_wr) begin
+                case (cpu_mem_addr[4:2])
+                    3'd0: begin gpu_x <= cpu_mem_wdata[15:0]; gpu_y <= cpu_mem_wdata[31:16]; end
+                    3'd1: begin gpu_w <= cpu_mem_wdata[15:0]; gpu_h <= cpu_mem_wdata[31:16]; end
+                    3'd2: begin gpu_color <= cpu_mem_wdata[3:0]; gpu_op <= OP_FILL; end
+                    3'd5: begin
+                        gpu_color <= cpu_mem_wdata[3:0];
+                        gpu_round <= cpu_mem_wdata[4];
+                        gpu_op    <= OP_OUTLINE;
+                    end
+                    3'd6: begin
+                        gpu_char   <= cpu_mem_wdata[7:0];
+                        gpu_color  <= cpu_mem_wdata[11:8];
+                        gpu_bg     <= cpu_mem_wdata[15:12];
+                        gpu_transp <= cpu_mem_wdata[16];
+                        gpu_op     <= OP_CHAR;
+                    end
+                    default: ;
+                endcase
+            end
+            if (gpu_launch && !gpu_launch_d) gpu_req <= ~gpu_req; // one toggle per command
         end
     end
-    wire [31:0] fb_rdata = {fb3_qa, fb2_qa, fb1_qa, fb0_qa};
 
-    // Display area within the active CGA raster, 636x81 drawn 1:1. The firmware
-    // selects the vertical origin so the overlay can sit low or high.
-    localparam [9:0] OSD_W  = 10'd636;
-    localparam [9:0] OSD_H  = 10'd81;
-    localparam [9:0] OSD_X0 = 10'd2;
-    wire [9:0] OSD_Y0 = osd_pos_pix ? 10'd5 : 10'd111;
-    wire [9:0] OSD_X1 = OSD_X0 + OSD_W - 10'd1;
-    wire [9:0] OSD_Y1 = OSD_Y0 + OSD_H - 10'd1;
+    // The command hand-off crosses clocks: gpu_req (clk_pico) is synchronised into clk_sys for
+    // the FSM, and the FSM's gpu_ack (clk_sys) is synchronised back so busy = req != ack reads
+    // in the CPU's own domain. Each side toggles only its own bit.
+    reg gpu_ack;                        // toggled by the FSM (clk_sys)
+    reg gpu_ack_s1, gpu_ack_s2;         // gpu_ack -> clk_pico
+    always @(posedge clk_pico) begin
+        if (reset) {gpu_ack_s2, gpu_ack_s1} <= 2'b00;
+        else       {gpu_ack_s2, gpu_ack_s1} <= {gpu_ack_s1, gpu_ack};
+    end
+    wire [31:0] gpu_status = {31'd0, gpu_req != gpu_ack_s2};
 
-    wire osd_in_bounds = (osd_hcnt >= OSD_X0) && (osd_hcnt <= OSD_X1) &&
-                         (osd_vcnt >= OSD_Y0) && (osd_vcnt <= OSD_Y1);
+    reg gpu_req_s1, gpu_req_s2;         // gpu_req -> clk_sys
+    always @(posedge clk_sys) begin
+        if (reset) {gpu_req_s2, gpu_req_s1} <= 2'b00;
+        else       {gpu_req_s2, gpu_req_s1} <= {gpu_req_s1, gpu_req};
+    end
 
-    // Non-power-of-two stride (636/2 = 318 bytes/row), so the row offset is a
-    // constant multiply rather than a bit-concatenation.
-    wire  [9:0] osd_x = osd_hcnt - OSD_X0;                                  // 0..635
-    wire  [9:0] osd_y = osd_vcnt - OSD_Y0;                                  // 0..80
-    wire [15:0] osd_byte_addr = osd_y[6:0] * 16'd318 + {7'd0, osd_x[9:1]};  // y*318 + x/2
-    wire [12:0] osd_word_addr = osd_byte_addr[14:2];
+    //
+    // Drawing FSM (clk_sys). Each pixel is one nibble, so the byte is read, the nibble
+    // replaced, and written back: GS_RD issues the read, GS_WR writes the modified byte and
+    // steps to the next pixel. FILL, OUTLINE and CHAR all walk a rectangle row by row (CHAR a
+    // fixed 8x8 cell); OUTLINE writes only the edge pixels and CHAR only the pixels its glyph
+    // lights, so each costs a fill of its bounding box. The byte address is an accumulator (row
+    // base plus x/2) so there is no per-pixel multiply. A FILL byte that lies fully inside the
+    // span is written as one solid byte covering two pixels, so an aligned fill costs one
+    // read-write pair per byte instead of one per pixel.
+    //
+    localparam GS_IDLE = 2'd0, GS_RD = 2'd1, GS_WR = 2'd2;
+    reg  [1:0] gs;
+    reg [15:0] beg_x, cur_x, end_x, beg_y, cur_y, end_y;
+    reg [15:0] row_base, baddr;
+    reg        nib;
+    reg  [3:0] draw_col, gs_bg;
+    reg        gs_outline, gs_round, gs_char, gs_transp;
+    reg  [7:0] gs_glyph;
+    reg  [2:0] gx, gy;                // glyph-local column/row within the 8x8 cell
+
+    // OSD font ROM: 256 glyphs x 8 rows, one 8-pixel row bitmap per byte (bit 7 = leftmost).
+    reg [7:0] font_rom [0:2047];
+    initial $readmemh("../firmware/font/font_8x8.vh", font_rom);
+    reg [7:0] font_q;                 // current glyph row, registered like the framebuffer read
+
+    reg [7:0] pa_q0, pa_q1, pa_q2, pa_q3;
+    wire [1:0]  cur_lane = baddr[1:0];
+    wire [7:0]  cur_byte = (cur_lane == 2'd0) ? pa_q0 :
+                           (cur_lane == 2'd1) ? pa_q1 :
+                           (cur_lane == 2'd2) ? pa_q2 : pa_q3;
+    // CHAR paints a glyph's lit pixels in the foreground colour and, when not transparent, the
+    // rest in the background; FILL and OUTLINE paint their single colour.
+    wire       font_bit = font_q[3'd7 - gx];
+    wire [3:0] draw_nib = gs_char ? (font_bit ? draw_col : gs_bg) : draw_col;
+    wire [7:0]  cur_byte_mod = nib ? {cur_byte[7:4], draw_nib} : {draw_nib, cur_byte[3:0]};
+    wire [13:0] pa_addr = baddr[15:2];
+    // A FILL byte fully inside the span (byte-aligned, so this nibble and the next are both
+    // filled) is written as one solid byte, both pixels at once. OUTLINE, CHAR and a FILL's
+    // ragged first/last nibble take the per-nibble read-modify-write path.
+    wire fill_byte = !gs_outline && !gs_char && (nib == 1'b0) && (cur_x < end_x);
+    // What each op writes at the current pixel: OUTLINE only the rectangle edges (a rounded
+    // outline drops the four corners); CHAR only lit pixels unless it is opaque; FILL every one.
+    wire on_edge   = (cur_x == beg_x) || (cur_x == end_x) || (cur_y == beg_y) || (cur_y == end_y);
+    wire at_corner = (cur_x == beg_x || cur_x == end_x) && (cur_y == beg_y || cur_y == end_y);
+    wire draw_px   = gs_char    ? (font_bit || !gs_transp)
+                   : gs_outline ? (on_edge && !(gs_round && at_corner))
+                   :              1'b1;
+    wire  [3:0] pa_we   = (gs == GS_WR && draw_px) ? (4'd1 << cur_lane) : 4'd0;
+    wire  [7:0] pa_wd   = fill_byte ? {draw_col, draw_col} : cur_byte_mod;
+
+    // Framebuffer Port A (GPU read/write) and font ROM read, clk_sys, registered (one cycle).
+    always @(posedge clk_sys) begin
+        if (pa_we[0]) fb0[pa_addr] <= pa_wd;
+        if (pa_we[1]) fb1[pa_addr] <= pa_wd;
+        if (pa_we[2]) fb2[pa_addr] <= pa_wd;
+        if (pa_we[3]) fb3[pa_addr] <= pa_wd;
+        pa_q0 <= fb0[pa_addr];
+        pa_q1 <= fb1[pa_addr];
+        pa_q2 <= fb2[pa_addr];
+        pa_q3 <= fb3[pa_addr];
+        font_q <= font_rom[{gs_glyph, gy}];
+    end
+
+    always @(posedge clk_sys) begin
+        if (reset) begin
+            gs      <= GS_IDLE;
+            gpu_ack <= 1'b0;
+        end else begin
+            case (gs)
+                GS_IDLE:
+                    if (gpu_req_s2 != gpu_ack) begin
+                        draw_col   <= gpu_color;
+                        gs_bg      <= gpu_bg;
+                        gs_outline <= (gpu_op == OP_OUTLINE);
+                        gs_round   <= gpu_round;
+                        gs_char    <= (gpu_op == OP_CHAR);
+                        gs_transp  <= gpu_transp;
+                        gs_glyph   <= gpu_char;
+                        gx         <= 3'd0;
+                        gy         <= 3'd0;
+                        beg_x      <= gpu_x;
+                        cur_x      <= gpu_x;
+                        beg_y      <= gpu_y;
+                        cur_y      <= gpu_y;
+                        end_x      <= (gpu_op == OP_CHAR) ? (gpu_x + 16'd7) : (gpu_x + gpu_w - 16'd1);
+                        end_y      <= (gpu_op == OP_CHAR) ? (gpu_y + 16'd7) : (gpu_y + gpu_h - 16'd1);
+                        row_base   <= gpu_y * OSD_STRIDE;
+                        baddr      <= gpu_y * OSD_STRIDE + {1'b0, gpu_x[15:1]};
+                        nib        <= gpu_x[0];
+                        gs         <= GS_RD;
+                    end
+                GS_RD: gs <= GS_WR;
+                GS_WR:
+                    if (fill_byte ? (cur_x + 16'd1 >= end_x) : (cur_x >= end_x)) begin
+                        if (cur_y >= end_y) begin
+                            gpu_ack <= ~gpu_ack;
+                            gs      <= GS_IDLE;
+                        end else begin
+                            cur_y    <= cur_y + 16'd1;
+                            row_base <= row_base + OSD_STRIDE;
+                            cur_x    <= beg_x;
+                            baddr    <= row_base + OSD_STRIDE + {1'b0, beg_x[15:1]};
+                            nib      <= beg_x[0];
+                            gx       <= 3'd0;
+                            gy       <= gy + 3'd1;
+                            gs       <= GS_RD;
+                        end
+                    end else if (fill_byte) begin
+                        cur_x <= cur_x + 16'd2;         // solid byte covers two pixels
+                        baddr <= baddr + 16'd1;
+                        gs    <= GS_RD;
+                    end else begin
+                        cur_x <= cur_x + 16'd1;
+                        if (nib) baddr <= baddr + 16'd1;
+                        nib   <= ~nib;
+                        gx    <= gx + 3'd1;
+                        gs    <= GS_RD;
+                    end
+            endcase
+        end
+    end
+
+    // Display area: the full 640x200 active raster, drawn 1:1. Overlays position themselves by
+    // where the firmware draws them, so the readout starts at the top-left of the raster.
+    localparam [9:0] OSD_W = 10'd640;
+    localparam [9:0] OSD_H = 10'd200;
+
+    wire osd_in_bounds = (osd_hcnt < OSD_W) && (osd_vcnt < OSD_H);
+
+    // Stride 320 bytes/row, so the row offset is a constant multiply.
+    wire  [9:0] osd_x = osd_hcnt;                                           // 0..639
+    wire  [9:0] osd_y = osd_vcnt;                                           // 0..199
+    wire [15:0] osd_byte_addr = osd_y[7:0] * 16'd320 + {7'd0, osd_x[9:1]};  // y*320 + x/2
+    wire [13:0] osd_word_addr = osd_byte_addr[15:2];
 
     // Port B: registered read in the video clock domain; lane/nibble/area
     // selectors are pipelined one stage to match the read latency.
@@ -395,7 +568,7 @@ module softcpu_subsystem (
             32'h1???_????: cpu_mem_rdata = ram_rdata;
             32'h2000_0000: cpu_mem_rdata = {16'd0, cont1_key};
             32'h3???_????: cpu_mem_rdata = fdd_rdata;
-            32'h4???_????: cpu_mem_rdata = fb_rdata;
+            32'h4???_????: cpu_mem_rdata = gpu_status;
             default:       cpu_mem_rdata = 32'd0;
         endcase
     end

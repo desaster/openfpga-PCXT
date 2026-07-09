@@ -1,87 +1,76 @@
 #include "vkb_draw.h"
 
-#include "font/font_8x8.h"
+#include "softcpu_regs.h"
 
-void osd_set_pixel(const osd_fb_t *fb, int x, int y, uint8_t color)
+// Wait until the GPU is idle so a launch does not overwrite a command still running. The
+// spin is bounded so a wedged GPU degrades to a misdrawn overlay, not a hung softcore (which
+// also services the disks). The largest fill needs a few thousand iterations; this is ample.
+static void gpu_wait(void)
 {
-    if (x < 0 || y < 0 || x >= fb->width || y >= fb->height) {
-        return;
-    }
-    uint8_t *b = &fb->pixels[y * fb->stride + (x >> 1)];
-    if (x & 1) {
-        *b = (*b & 0xF0) | (color & 0x0F);
-    } else {
-        *b = (*b & 0x0F) | ((color & 0x0F) << 4);
+    for (uint32_t spins = 0; (*GPU_STATUS & 1u) && spins < 1000000u; spins++) {
     }
 }
 
-// Byte-wise fill: whole bytes (two pixels) for the run, with the odd leading or
-// trailing pixel masked in. The rect is clipped to the buffer once, so the inner
-// loop needs no per-pixel bounds checks.
+// Clipped to the region, then drawn by the GPU as one fill command in framebuffer coordinates.
 void osd_fill_rect(const osd_fb_t *fb, int x, int y, int w, int h, uint8_t color)
 {
-    int x0 = x < 0 ? 0 : x;
-    int y0 = y < 0 ? 0 : y;
-    int x1 = x + w > fb->width ? fb->width : x + w;
-    int y1 = y + h > fb->height ? fb->height : y + h;
-    if (x0 >= x1 || y0 >= y1) {
+    int cx0 = x < 0 ? 0 : x;
+    int cy0 = y < 0 ? 0 : y;
+    int cx1 = x + w > fb->width ? fb->width : x + w;
+    int cy1 = y + h > fb->height ? fb->height : y + h;
+    if (cx0 >= cx1 || cy0 >= cy1) {
         return; // fully clipped
     }
-    uint8_t nib = color & 0x0F;
-    uint8_t pair = (nib << 4) | nib;
-    for (int ry = y0; ry < y1; ry++) {
-        uint8_t *row = &fb->pixels[ry * fb->stride];
-        int rx = x0;
-        if (rx & 1) {
-            row[rx >> 1] = (row[rx >> 1] & 0xF0) | nib;
-            rx++;
-        }
-        while (rx + 1 < x1) {
-            row[rx >> 1] = pair;
-            rx += 2;
-        }
-        if (rx < x1) {
-            row[rx >> 1] = (row[rx >> 1] & 0x0F) | (nib << 4);
-        }
-    }
+    gpu_wait();
+    *GPU_XY = ((uint32_t) (fb->y0 + cy0) << 16) | (uint32_t) (fb->x0 + cx0);
+    *GPU_WH = ((uint32_t) (cy1 - cy0) << 16) | (uint32_t) (cx1 - cx0);
+    *GPU_FILL = color & 0x0F;
 }
 
 void osd_clear(const osd_fb_t *fb, uint8_t color)
 {
-    uint8_t nib = color & 0x0F;
-    uint8_t pair = (nib << 4) | nib;
-    int n = fb->stride * fb->height;
-    for (int i = 0; i < n; i++) {
-        fb->pixels[i] = pair;
-    }
+    osd_fill_rect(fb, 0, 0, fb->width, fb->height, color);
 }
 
-// 1px outline with the four corner pixels left untouched, which reads as a
-// 1px-rounded key when drawn over the body.
+// Clear the whole framebuffer to transparent, so a previous overlay leaves no ghost.
+void osd_clear_screen(void)
+{
+    gpu_wait();
+    *GPU_XY = 0;
+    *GPU_WH = ((uint32_t) OSD_FB_HEIGHT << 16) | (uint32_t) OSD_FB_WIDTH;
+    *GPU_FILL = OSD_CLEAR;
+}
+
+// 1px rectangle outline drawn by the GPU as one command. rounded omits the four corner
+// pixels, so it reads as a 1px-rounded key over the body. The whole rectangle must lie within
+// the framebuffer (the key layout guarantees it); an out-of-bounds outline is skipped.
+void osd_rect_outline(const osd_fb_t *fb, int x, int y, int w, int h, uint8_t color, int rounded)
+{
+    if (w < 2 || h < 2 || x < 0 || y < 0 || x + w > fb->width || y + h > fb->height) {
+        return;
+    }
+    gpu_wait();
+    *GPU_XY = ((uint32_t) (fb->y0 + y) << 16) | (uint32_t) (fb->x0 + x);
+    *GPU_WH = ((uint32_t) h << 16) | (uint32_t) w;
+    *GPU_OUTLINE = (rounded ? GPU_OUTLINE_ROUND : 0u) | (uint32_t) (color & 0x0F);
+}
+
+// 1px-rounded outline (the four corner pixels omitted), the key-border look.
 void osd_border(const osd_fb_t *fb, int x, int y, int w, int h, uint8_t color)
 {
-    for (int i = 1; i < w - 1; i++) {
-        osd_set_pixel(fb, x + i, y, color);
-        osd_set_pixel(fb, x + i, y + h - 1, color);
-    }
-    for (int i = 1; i < h - 1; i++) {
-        osd_set_pixel(fb, x, y + i, color);
-        osd_set_pixel(fb, x + w - 1, y + i, color);
-    }
+    osd_rect_outline(fb, x, y, w, h, color, 1);
 }
 
-// One 8x8 CGA glyph: a set bit lights a pixel. Off pixels are left transparent so
-// the key face shows through.
+// One 8x8 glyph drawn by the GPU: lit pixels take the colour and the rest stay transparent,
+// so the key face shows through. The whole cell must lie within the framebuffer.
 void osd_draw_char(const osd_fb_t *fb, int x, int y, uint8_t ch, uint8_t color)
 {
-    for (int row = 0; row < 8; row++) {
-        uint8_t bits = font_8x8[ch][row];
-        for (int col = 0; col < 8; col++) {
-            if (bits & (0x80 >> col)) {
-                osd_set_pixel(fb, x + col, y + row, color);
-            }
-        }
+    if (x < 0 || y < 0 || x + 8 > fb->width || y + 8 > fb->height) {
+        return;
     }
+    gpu_wait();
+    *GPU_XY = ((uint32_t) (fb->y0 + y) << 16) | (uint32_t) (fb->x0 + x);
+    *GPU_CHAR = GPU_CHAR_TRANSP | ((uint32_t) (color & 0x0F) << 8) | (uint32_t) ch;
 }
 
 void osd_draw_string(const osd_fb_t *fb, int x, int y, const char *s, uint8_t color)

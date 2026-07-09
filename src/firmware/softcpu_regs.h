@@ -25,12 +25,23 @@
 #define HDD0_DISK_SIZE ((volatile uint32_t *) 0x30000048) // R: hard-disk-0 image size in sectors
 #define HDD1_DISK_SIZE ((volatile uint32_t *) 0x3000004C) // R: hard-disk-1 image size in sectors
 
-// OSD framebuffer (softcpu_subsystem), 636x81 at 4bpp, mapped in the 0x4 region.
-#define OSD_FB ((uint8_t *) 0x40000000)
+// OSD GPU command registers (softcpu_subsystem), mapped in the 0x4 region. Set XY (and WH for
+// FILL/OUTLINE) then write the op; poll STATUS between commands.
+#define GPU_XY      ((volatile uint32_t *) 0x40000000) // W: {y[15:0], x[15:0]}
+#define GPU_WH      ((volatile uint32_t *) 0x40000004) // W: {h[15:0], w[15:0]}
+#define GPU_FILL    ((volatile uint32_t *) 0x40000008) // W: color[3:0] -> fill XY/WH rectangle
+#define GPU_STATUS  ((volatile uint32_t *) 0x40000010) // R: bit0 = busy
+#define GPU_OUTLINE ((volatile uint32_t *) 0x40000014) // W: {round[4], color[3:0]} -> outline rect
+#define GPU_CHAR    ((volatile uint32_t *) 0x40000018) // W: {transp,bg[15:12],fg[11:8],char[7:0]}
+
+// GPU_OUTLINE flag: omit the four corner pixels (1px-rounded look).
+#define GPU_OUTLINE_ROUND (1u << 4)
+// GPU_CHAR flag: draw only the glyph's lit pixels, leaving the background untouched.
+#define GPU_CHAR_TRANSP (1u << 16)
 
 // Status / control (0x2 region).
 #define CONT1_KEY ((volatile uint32_t *) 0x20000000) // R: pocket controller-1 buttons
-#define VKB_CTRL  ((volatile uint32_t *) 0x20000004) // W: bit0 = OSD shown, bit1 = OSD at top
+#define VKB_CTRL  ((volatile uint32_t *) 0x20000004) // W: bit0 = OSD overlay shown
 #define VKB_KEY   ((volatile uint32_t *) 0x20000008) // W: bit8 = make, bits[7:0] Set-2 code
 
 // cont1_key button bits (Analogue Pocket layout).

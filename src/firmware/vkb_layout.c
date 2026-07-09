@@ -150,7 +150,8 @@ static void draw_legend_right(const osd_fb_t *fb, const vkb_key_t *k, int y, con
 
 void vkb_draw_keyboard(const osd_fb_t *fb, int selected)
 {
-    osd_clear(fb, OSD_BODY);
+    osd_clear_screen();      // erase any previous overlay across the full framebuffer
+    osd_clear(fb, OSD_BODY); // the keyboard bezel fills the VKB region
     for (int i = 0; i < vkb_key_count; i++) {
         const vkb_key_t *k = &vkb_keys[i];
         osd_fill_rect(fb, k->x + 1, k->y + 1, k->w - 2, k->h - 2, k->face);

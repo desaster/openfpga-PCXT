@@ -10,6 +10,12 @@
 #define MOVE_COOLDOWN (CLK_FREQ / 25) // debounce between moves
 #define BTN_DPAD      (BTN_UP | BTN_DOWN | BTN_LEFT | BTN_RIGHT)
 
+// The 636x81 keyboard sits near the bottom (or top) of the 640x200 framebuffer; the position
+// toggle just redraws it at the other origin.
+#define VKB_X        2
+#define VKB_Y_TOP    5
+#define VKB_Y_BOTTOM 111
+
 // KFPS2KB accepts one Set-2 byte per ~0.88 ms (1136/s); a break is two bytes. Emitting
 // a burst of breaks (clearing many latches at once) faster than that overflows
 // pocket_keyboard's event queue and drops keys, leaving them stuck down. Pace each break
@@ -42,10 +48,10 @@ static void vkb_emit(int make, uint8_t scancode)
     *VKB_KEY = ((uint32_t) (make ? 1 : 0) << 8) | scancode;
 }
 
-// OSD control word: bit0 = shown, bit1 = top/bottom position.
+// OSD control word: bit0 = overlay shown. Position is set by where vkb_draw_keyboard draws.
 static void vkb_ctrl_write(void)
 {
-    *VKB_CTRL = (ui_active ? 1u : 0u) | (ui_osd_top ? 2u : 0u);
+    *VKB_CTRL = ui_active ? 1u : 0u;
 }
 
 static int is_latched(int i)
@@ -137,14 +143,14 @@ static void cursor_move(int dx, int dy)
 
 void vkb_ui_init(void)
 {
-    osd.pixels = OSD_FB;
+    osd.x0 = VKB_X;
     osd.width = vkb_width_px();
     osd.height = vkb_height_px();
-    osd.stride = vkb_width_px() / 2;
     cur_key = 0;
     cur_vrow = 0;
     held_key = -1;
     ui_osd_top = 0;
+    osd.y0 = ui_osd_top ? VKB_Y_TOP : VKB_Y_BOTTOM;
     latch_bits[0] = latch_bits[1] = latch_bits[2] = 0;
     vkb_draw_keyboard(&osd, cur_key);
 }
@@ -213,9 +219,10 @@ void vkb_ui_tick(void)
             vkb_ctrl_write();
             return;
         }
-        if (pressed & BTN_R1) { // swap the OSD between bottom and top
+        if (pressed & BTN_R1) { // swap the OSD between bottom and top, redrawing at the new spot
             ui_osd_top = !ui_osd_top;
-            vkb_ctrl_write();
+            osd.y0 = ui_osd_top ? VKB_Y_TOP : VKB_Y_BOTTOM;
+            vkb_draw_keyboard(&osd, cur_key);
         }
         // D-pad: a fresh press moves once; holding past REPEAT_DELAY repeats at
         // REPEAT_RATE. A short cooldown debounces each move; diagonals resolve to
