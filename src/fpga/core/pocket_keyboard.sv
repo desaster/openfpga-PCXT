@@ -17,13 +17,15 @@ module pocket_keyboard (
     input        reset,
     input [15:0] buttons,      // cont1_key
     input        gamepad,      // 1 = joystick mode: buttons drive the game port, not keys
-    input        osd_active,   // 1 = virtual keyboard open: suppress button typing
+    input        osd_active,   // 1 = an overlay (OSD or credits) is up: suppress button typing
     input  [8:0] vkb_key,      // virtual-keyboard event: {make, Set-2 code}
     input        vkb_stb,      // toggles per firmware-emitted event
     input  [7:0] cfg_a,        // Set-2 scancode per face button (0 = unmapped)
     input  [7:0] cfg_b,
     input  [7:0] cfg_x,
     input  [7:0] cfg_y,
+    input  [7:0] cfg_select,   // Set-2 code for Select/Start when mapped to a key (0 when a function)
+    input  [7:0] cfg_start,
     input [31:0] cont3_joy,    // docked USB: HID usage codes 1-4
     input [15:0] cont3_trig,   // docked USB: HID usage codes 5-6
     input [15:0] cont3_key,    // docked USB: modifier bits (byte [15:8])
@@ -36,18 +38,18 @@ module pocket_keyboard (
 
     //
     // Source A: controller buttons. Synchronise cont1_key, then scan the mapped bits
-    // one per clock: [0]=up [1]=down [2]=left [3]=right [4]=A [5]=B [6]=X [7]=Y,
-    // [8]=Select [9]=Start. D-pad is fixed to the XT keypad arrows; A/B/X/Y take their
-    // Set-2 code from the interact-menu config (cfg_*, 0 = unmapped); Select/Start are
-    // fixed to Tab/Enter. Selected by the current scan index.
+    // one per clock: [0]=up [1]=down [2]=left [3]=right [4]=A [5]=B [6]=X [7]=Y, [8]=Select
+    // [9]=Start. D-pad is fixed to the XT keypad arrows; A/B/X/Y and Select/Start take their
+    // Set-2 code from the interact-menu config (cfg_*, 0 = unmapped). Select/Start read 0 when
+    // set to an OSD function (Settings or credits), which the softcore handles instead.
     //
     reg [9:0] btn_s0, btn_s, btn_prev, btn_mask;
     reg [3:0] btn_idx;
 
-    // Key-mapped buttons before OSD gating: Start/Select always, plus (unless in
-    // joystick mode) the D-pad and A/B/X/Y face buttons. btn_mask holds those still
-    // down when the OSD closes so they cannot emit a make until released (closing the
-    // keyboard with B would otherwise type B's mapped key into the guest).
+    // Key-mapped buttons before OSD gating: Select/Start always, plus (unless in joystick mode)
+    // the D-pad and A/B/X/Y face buttons. btn_mask holds those still down when the OSD closes so
+    // they cannot emit a make until released (closing the keyboard with B would otherwise type
+    // B's mapped key into the guest).
     wire [9:0] btn_gated = {buttons[15], buttons[14], gamepad ? 8'd0 : buttons[7:0]};
 
     wire [7:0] cur_code = (btn_idx == 4'd0) ? 8'h75 :  // up     -> keypad 8
@@ -58,8 +60,8 @@ module pocket_keyboard (
                           (btn_idx == 4'd5) ? cfg_b  :
                           (btn_idx == 4'd6) ? cfg_x  :
                           (btn_idx == 4'd7) ? cfg_y  :
-                          (btn_idx == 4'd8) ? 8'h0D :  // Select -> Tab
-                                              8'h5A;   // Start  -> Enter
+                          (btn_idx == 4'd8) ? cfg_select :
+                                              cfg_start;   // idx 9 = Start
 
     //
     // Source B: docked USB keyboard. Synchronise cont3_* from the clk_74a bridge domain,

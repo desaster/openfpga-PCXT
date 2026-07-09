@@ -47,6 +47,17 @@
         "deferload": true,
         "extensions": ["vhd", "img"],
         "size_maximum": "0x40000000"
+      },
+      {
+        "name": "Settings",
+        "id": 6,
+        "required": false,
+        "parameters": "0x22",
+        "nonvolatile": true,
+        "filename": "settings.dat",
+        "extensions": ["dat"],
+        "address": "0x60000200",
+        "size_maximum": "0x40"
       }
     ]
   }

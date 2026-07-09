@@ -6,6 +6,7 @@
 // from a floppy, from the hard disk, or from either once its image appears. The heavy
 // lifting lives in fdd_service.c and ide_service.c; this is just the top-level loop.
 
+#include "settings_ui.h"
 #include "softcpu_regs.h"
 #include "vkb_ui.h"
 
@@ -32,6 +33,7 @@ int main(void)
     // unless) an image mounts; this also clears a stale-present state after a reset.
     ide_init();
     vkb_ui_init();
+    settings_load(); // adopt persisted settings before the timer IRQ can draw the OSD
 
     // Arm the timer and enable only its interrupt (bit 0); the fault interrupts stay
     // masked so an illegal instruction still traps rather than looping in irq().
@@ -77,6 +79,7 @@ int main(void)
         if (mounted_hdd || mounted_hdd_b) {
             ide_poll();
         }
+        settings_service(); // persist any OSD changes into the save window
     }
 
     return 0;

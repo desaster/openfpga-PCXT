@@ -71,12 +71,31 @@ module softcpu_subsystem (
 
     // Controller-1 buttons in; OSD-shown flag out (both firmware-facing).
     input  [15:0] cont1_key,
+    input   [3:0] select_fn,      // interact Button Select / Start function ids
+    input   [3:0] start_fn,
+    input         credits_active, // credits overlay up: firmware suppresses OSD button input
+    input         osd_open_req,   // interact "Extra Options" requests the settings OSD
     output        osd_active,
+    output        osd_reset_req,
+    output        osd_credits_req,
 
     // Virtual-keyboard key event: {make, Set-2 code}, with a strobe that toggles
     // per firmware write so pocket_keyboard pushes exactly one queue entry.
     output  [8:0] vkb_key,
-    output        vkb_stb
+    output        vkb_stb,
+
+    // Machine settings edited in the OSD, driven out to core_top (clk_sys), one output per wired
+    // setting; the indices into osd_settings[] below match settings_ui.c's SET_* enum.
+    output  [2:0] osd_palette,
+    output  [1:0] osd_cpu_speed,
+    output  [1:0] osd_bios_wr,
+    output  [1:0] osd_opl2,
+    output  [1:0] osd_boost,
+    output  [1:0] osd_spk_vol,
+    output        osd_composite,
+    output        osd_ems,
+    output  [1:0] osd_ems_frame,
+    output        osd_a000
 );
 
     //
@@ -147,6 +166,23 @@ module softcpu_subsystem (
     end
     assign osd_active = osd_active_r;
 
+    // OSD action trigger at 0x20000010: bit0 requests a PC reset, bit1 the credits overlay. Reset
+    // resets the softcore too, so its request self-clears; core_top stretches reset into a clean
+    // pulse and edge-detects credits (the firmware clears the register when the panel reopens).
+    reg osd_reset_req_r = 1'b0;
+    reg osd_credits_req_r = 1'b0;
+    always @(posedge clk_pico) begin
+        if (reset) begin
+            osd_reset_req_r   <= 1'b0;
+            osd_credits_req_r <= 1'b0;
+        end else if (sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[4:2] == 3'd4) begin
+            osd_reset_req_r   <= cpu_mem_wdata[0];
+            osd_credits_req_r <= cpu_mem_wdata[1];
+        end
+    end
+    assign osd_reset_req   = osd_reset_req_r;
+    assign osd_credits_req = osd_credits_req_r;
+
     // Virtual-keyboard key event, written by the firmware at 0x20000008. The CPU
     // holds a store across two clk_pico cycles, so the write is edge-detected to
     // toggle the strobe exactly once; pocket_keyboard reads the strobe directly
@@ -170,6 +206,43 @@ module softcpu_subsystem (
     end
     assign vkb_key = vkb_key_r;
     assign vkb_stb = vkb_stb_r;
+
+    // OSD-edited machine settings, written by the firmware at 0x2000000C as {index[12:8],
+    // value[7:0]} into a small register file; the index order matches settings_ui.c's SET_* enum.
+    // A plain value latch: the two-cycle PicoRV32 store just writes the same value twice, so no
+    // strobe or edge-detect is needed. Only the settings wired to an output leave this module.
+    localparam SET_IDX_CPU_SPEED = 5'd0;
+    localparam SET_IDX_BIOS_WR   = 5'd1;
+    localparam SET_IDX_OPL2      = 5'd2;
+    localparam SET_IDX_BOOST     = 5'd3;
+    localparam SET_IDX_SPK_VOL   = 5'd4;
+    localparam SET_IDX_COMPOSITE = 5'd7;
+    localparam SET_IDX_DISPLAY   = 5'd8;
+    localparam SET_IDX_EMS       = 5'd9;
+    localparam SET_IDX_EMS_FRAME = 5'd10;
+    localparam SET_IDX_A000      = 5'd11;
+    reg [7:0] osd_settings [0:31];
+    wire settings_wr = sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[3:2] == 2'd3;
+    integer si;
+    always @(posedge clk_pico) begin
+        if (reset) begin
+            for (si = 0; si < 32; si = si + 1) begin
+                osd_settings[si] <= 8'd0;
+            end
+        end else if (settings_wr) begin
+            osd_settings[cpu_mem_wdata[12:8]] <= cpu_mem_wdata[7:0];
+        end
+    end
+    assign osd_palette   = osd_settings[SET_IDX_DISPLAY][2:0];
+    assign osd_cpu_speed = osd_settings[SET_IDX_CPU_SPEED][1:0];
+    assign osd_bios_wr   = osd_settings[SET_IDX_BIOS_WR][1:0];
+    assign osd_opl2      = osd_settings[SET_IDX_OPL2][1:0];
+    assign osd_boost     = osd_settings[SET_IDX_BOOST][1:0];
+    assign osd_spk_vol   = osd_settings[SET_IDX_SPK_VOL][1:0];
+    assign osd_composite = osd_settings[SET_IDX_COMPOSITE][0];
+    assign osd_ems       = osd_settings[SET_IDX_EMS][0];
+    assign osd_ems_frame = osd_settings[SET_IDX_EMS_FRAME][1:0];
+    assign osd_a000      = osd_settings[SET_IDX_A000][0];
 
     //
     // Memory ready. The ROM read is registered, so it needs two clk_pico cycles;
@@ -566,7 +639,7 @@ module softcpu_subsystem (
         casez (cpu_mem_addr)
             32'h0???_????: cpu_mem_rdata = rom_rdata;
             32'h1???_????: cpu_mem_rdata = ram_rdata;
-            32'h2000_0000: cpu_mem_rdata = {16'd0, cont1_key};
+            32'h2000_0000: cpu_mem_rdata = {6'd0, osd_open_req, credits_active, start_fn, select_fn, cont1_key};
             32'h3???_????: cpu_mem_rdata = fdd_rdata;
             32'h4???_????: cpu_mem_rdata = gpu_status;
             default:       cpu_mem_rdata = 32'd0;

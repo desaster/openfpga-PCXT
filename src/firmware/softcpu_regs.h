@@ -40,21 +40,42 @@
 #define GPU_CHAR_TRANSP (1u << 16)
 
 // Status / control (0x2 region).
-#define CONT1_KEY ((volatile uint32_t *) 0x20000000) // R: pocket controller-1 buttons
-#define VKB_CTRL  ((volatile uint32_t *) 0x20000004) // W: bit0 = OSD overlay shown
-#define VKB_KEY   ((volatile uint32_t *) 0x20000008) // W: bit8 = make, bits[7:0] Set-2 code
+#define CONT1_KEY    ((volatile uint32_t *) 0x20000000) // R: pocket controller-1 buttons
+#define VKB_CTRL     ((volatile uint32_t *) 0x20000004) // W: bit0 = OSD overlay shown
+#define VKB_KEY      ((volatile uint32_t *) 0x20000008) // W: bit8 = make, bits[7:0] Set-2 code
+#define SETTINGS_REG ((volatile uint32_t *) 0x2000000C) // W: {index[12:8], value[7:0]}
+#define OSD_ACTION   ((volatile uint32_t *) 0x20000010) // W: bit0 = reset PC, bit1 = show credits
+
+// OSD_ACTION command bits.
+#define OSD_ACT_RESET   1u
+#define OSD_ACT_CREDITS 2u
 
 // cont1_key button bits (Analogue Pocket layout).
-#define BTN_UP    (1 << 0)
-#define BTN_DOWN  (1 << 1)
-#define BTN_LEFT  (1 << 2)
-#define BTN_RIGHT (1 << 3)
-#define BTN_A     (1 << 4)
-#define BTN_B     (1 << 5)
-#define BTN_X     (1 << 6)
-#define BTN_Y     (1 << 7)
-#define BTN_L1    (1 << 8)
-#define BTN_R1    (1 << 9)
+#define BTN_UP     (1 << 0)
+#define BTN_DOWN   (1 << 1)
+#define BTN_LEFT   (1 << 2)
+#define BTN_RIGHT  (1 << 3)
+#define BTN_A      (1 << 4)
+#define BTN_B      (1 << 5)
+#define BTN_X      (1 << 6)
+#define BTN_Y      (1 << 7)
+#define BTN_L1     (1 << 8)
+#define BTN_R1     (1 << 9)
+#define BTN_SELECT (1 << 14)
+#define BTN_START  (1 << 15)
+
+// CONT1_KEY carries the Select/Start function config and two overlay flags in its upper bits
+// (the low 16 are the buttons): select_fn[19:16], start_fn[23:20], credits[24], osd_open[25].
+#define CONT1_SEL_FN(raw)   (((raw) >> 16) & 0xFu)
+#define CONT1_START_FN(raw) (((raw) >> 20) & 0xFu)
+#define CONT1_CREDITS(raw)  ((raw) & (1u << 24))
+#define CONT1_OSD_OPEN(raw) ((raw) & (1u << 25)) // interact "Extra Options" requests the OSD
+
+// Button function ids the softcore routes (derived in core_top from the Select/Start config;
+// key options are handled by pocket_keyboard, not here).
+#define BTNFN_NONE     0u
+#define BTNFN_SETTINGS 1u
+#define BTNFN_CREDITS  2u
 
 // FDD_REQUEST bits
 #define FDD_REQ_READ  (1 << 0)

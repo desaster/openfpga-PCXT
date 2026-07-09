@@ -294,11 +294,9 @@ module core_top (
 
     wire forced_scandoubler;
     wire [1:0] buttons;
-    // Config register: constant Pocket defaults, except
-    // the bits driven by the interact settings menu (CPU speed [18:17], floppy
-    // write-protect [20:19]) via the *_cfg registers below, which supersede the
-    // constant for those bits. All-zero gives CGA on, EMS on, A000 UMB on, BIOS
-    // write-protected, 4.77 MHz, no border, full-colour, no audio mix.
+    // Config word: a constant of fixed Pocket defaults. The user-changeable options are not
+    // taken from here - they come from the settings bank (osd_*) and the interact regs (*_cfg)
+    // below and are consumed directly; only the fixed status[...] reads remain.
     // NB: CGA/EMS/A000 UMB/OPL2 being "on" is contingent on the ENABLE_* macros in
     // ap_core.qsf; the `ifndef fallbacks at the top of this file default them off.
     // The qsf is the source of truth for the feature-enable set.
@@ -333,6 +331,13 @@ module core_top (
     // game port over the keyboard.
     wire [7:0]  key_a, key_b, key_x, key_y;
     wire        gamepad;
+    // Button Select/Start config: 0xF1=Settings, 0xF2=Pause/Credits, other = Set-2 key. Split into
+    // a 2-bit OSD function for the softcore and a key scancode (0 for the functions) for the keyboard.
+    wire [7:0]  select_cfg, start_cfg;
+    wire [3:0]  select_fn  = (select_cfg == 8'hF1) ? 4'd1 : (select_cfg == 8'hF2) ? 4'd2 : 4'd0;
+    wire [3:0]  start_fn   = (start_cfg  == 8'hF1) ? 4'd1 : (start_cfg  == 8'hF2) ? 4'd2 : 4'd0;
+    wire [7:0]  select_key = (select_cfg < 8'hF0) ? select_cfg : 8'h00;
+    wire [7:0]  start_key  = (start_cfg  < 8'hF0) ? start_cfg  : 8'h00;
     wire [15:0] cont1_key_chip;
 
     // Game port P1 stays enabled so games always detect a joystick, like a real
@@ -346,7 +351,7 @@ module core_top (
     wire [2:0] screen_mode = status[16:14];
     wire [1:0] ar = status[9:8];
     wire border = status[29] | xtctl[1];
-    wire a000h = `ENABLE_A000_UMB ? (~status[41] & ~xtctl[6]) : 1'b0;
+    wire a000h = `ENABLE_A000_UMB ? (a000_en_cfg & ~xtctl[6]) : 1'b0;
     wire [2:0] vsync_width_osd = status[56:54];  // 0=Auto (use register), 1-7=override
     wire [2:0] hsync_width_osd = status[59:57];  // 0=Auto, 1-7=fixed width (Nx16 pixel clocks)
 
@@ -468,70 +473,97 @@ module core_top (
     // it to the chipset clock, and fold it into the guest reset so the machine
     // re-POSTs and the disk softcore re-mounts the current floppy images.
     reg [19:0] interact_reset_delay = 20'd0;
+    // Interact-menu "Extra Options" action: the Pocket writes 0x54 once; the same single-write
+    // stretch, synced to the softcore (which owns the OSD) so it opens the settings panel. The
+    // guaranteed opener if Button Select has been remapped away from Settings.
+    reg [19:0] osd_open_delay = 20'd0;
     // Interact-menu settings (interact.json list variables), each latched write-only
-    // from its own bridge address, then synch_3'd into the core clock. They supersede
-    // the matching bits of the constant `status` above.
-    reg  [1:0] cpu_speed_cfg_74a = 2'd0;   // 0=4.77 1=7.16 2=9.54 3=PC/AT 3.5 MHz
-    reg  [2:0] palette_cfg_74a   = 3'd0;   // display palette (0=full colour, 1-7 mono tints)
-    reg        composite_cfg_74a = 1'b0;   // CGA composite colour decode (0 = RGBI)
+    // from its own bridge address, then synch_3'd into the core clock and consumed
+    // directly by the machine below.
     reg  [1:0] wp_cfg_74a        = 2'd0;   // floppy write-protect {B:, A:}
-    reg  [1:0] opl2_cfg_74a      = 2'd0;   // OPL2 port: 0=Adlib 388h, 1=SB FM 228h, 2=off
-    reg  [1:0] boost_cfg_74a     = 2'd0;   // audio boost: 0=none, 1=2x, 2=4x (compressor)
     reg        splash_cfg_74a    = 1'b1;   // boot splash enable (default on)
     reg  [7:0] key_a_74a         = 8'h14;  // A default: L-Ctrl (Set-2 scancode)
     reg  [7:0] key_b_74a         = 8'h11;  // B default: L-Alt
     reg  [7:0] key_x_74a         = 8'h29;  // X default: Space
     reg  [7:0] key_y_74a         = 8'h5A;  // Y default: Enter
     reg        gamepad_74a       = 1'b0;   // 0 = keyboard, 1 = joystick (game port)
+    reg  [7:0] select_cfg_74a    = 8'hF1;  // Button Select: 0xF1 = Settings (default)
+    reg  [7:0] start_cfg_74a     = 8'hF2;  // Button Start: 0xF2 = Pause/Credits (default)
     reg        credits_active_74a = 1'b0;  // credits showing: set by the menu action, cleared by any button
     wire       any_btn_74a;                // any Pocket controller-1 button, synced to this domain
     synch_3 s_anybtn (|cont1_key, any_btn_74a, clk_74a);
+    wire       osd_reset_req_74a;          // OSD Reset PC request, synced from the softcore
+    synch_3 s_osd_reset_74a (osd_reset_req, osd_reset_req_74a, clk_74a);
+    wire       osd_credits_req_74a;        // OSD Show Credits request, synced from the softcore
+    synch_3 s_osd_credits_74a (osd_credits_req, osd_credits_req_74a, clk_74a);
+    reg        any_btn_74a_d = 1'b0;
+    reg        osd_credits_req_74a_d = 1'b0;
     always @(posedge clk_74a) begin
         if (interact_reset_delay != 20'd0)
             interact_reset_delay <= interact_reset_delay - 20'd1;
+        if (osd_open_delay != 20'd0)
+            osd_open_delay <= osd_open_delay - 20'd1;
         if (bridge_wr) begin
             case (bridge_addr)
                 32'h0000_0050: interact_reset_delay <= 20'hFFFFF;  // Reset & Apply
-                32'h0000_0060: cpu_speed_cfg_74a <= bridge_wr_data[1:0];
-                32'h0000_0064: palette_cfg_74a   <= bridge_wr_data[2:0];
-                32'h0000_007C: composite_cfg_74a <= bridge_wr_data[0];
+                32'h0000_0054: osd_open_delay       <= 20'hFFFFF;  // Extra Options (open OSD)
                 32'h0000_006C: wp_cfg_74a        <= bridge_wr_data[1:0];
-                32'h0000_0070: opl2_cfg_74a      <= bridge_wr_data[1:0];
                 32'h0000_0068: splash_cfg_74a    <= bridge_wr_data[0];
-                32'h0000_0074: boost_cfg_74a     <= bridge_wr_data[1:0];
                 32'h0000_0080: key_a_74a         <= bridge_wr_data[7:0];
                 32'h0000_0084: key_b_74a         <= bridge_wr_data[7:0];
                 32'h0000_0088: key_x_74a         <= bridge_wr_data[7:0];
                 32'h0000_008C: key_y_74a         <= bridge_wr_data[7:0];
                 32'h0000_0090: gamepad_74a       <= bridge_wr_data[0];
+                32'h0000_0094: select_cfg_74a    <= bridge_wr_data[7:0];
+                32'h0000_0098: start_cfg_74a     <= bridge_wr_data[7:0];
                 32'h0000_0078: credits_active_74a <= 1'b1;         // Show Credits (start)
             endcase
         end
-        // No debounce needed on the dismiss: the button that closes the interact menu is
-        // consumed by the OS and never reaches the core.
-        if (any_btn_74a)
+        if (osd_reset_req_74a)
+            interact_reset_delay <= 20'hFFFFF;  // OSD Reset PC reuses the interact reset stretch
+        // Show Credits request (from the OSD) and the any-button dismiss are edge-detected: the
+        // button that picks Show Credits is still held, so a level dismiss would clear it at once.
+        any_btn_74a_d         <= any_btn_74a;
+        osd_credits_req_74a_d <= osd_credits_req_74a;
+        if (osd_credits_req_74a & ~osd_credits_req_74a_d)
+            credits_active_74a <= 1'b1;
+        else if (any_btn_74a & ~any_btn_74a_d)
             credits_active_74a <= 1'b0;
     end
     wire       interact_reset;
+    wire       osd_open_req;
     wire [1:0] cpu_speed_cfg;
+    wire [1:0] bios_wr_cfg;
     wire [1:0] wp_cfg;
     wire [1:0] opl2_cfg;
     wire [1:0] boost_cfg;
-    // palette_cfg is synced into the clk_pix video domain (used by the output tint).
+    wire [1:0] spk_vol_cfg;
+    wire       ems_en_cfg;
+    wire [1:0] ems_frame_cfg;
+    wire       a000_en_cfg;
+    // The OSD-driven display palette, synced into the clk_pix video domain for the output tint.
     wire [2:0] palette_cfg;
     synch_3              s_interact_reset (|interact_reset_delay, interact_reset, clk_chipset);
-    synch_3 #(.WIDTH(2)) s_cpu_speed_cfg  (cpu_speed_cfg_74a, cpu_speed_cfg, clk_chipset);
+    synch_3              s_osd_open       (|osd_open_delay,    osd_open_req,  clk_chipset);
+    synch_3 #(.WIDTH(2)) s_cpu_speed_cfg  (osd_cpu_speed,     cpu_speed_cfg, clk_chipset);
+    synch_3 #(.WIDTH(2)) s_bios_wr_cfg    (osd_bios_wr,       bios_wr_cfg,   clk_chipset);
     synch_3 #(.WIDTH(2)) s_wp_cfg         (wp_cfg_74a,        wp_cfg,        clk_chipset);
-    synch_3 #(.WIDTH(2)) s_opl2_cfg       (opl2_cfg_74a,      opl2_cfg,      clk_chipset);
-    synch_3 #(.WIDTH(2)) s_boost_cfg      (boost_cfg_74a,     boost_cfg,     clk_chipset);
-    synch_3              s_composite_cfg  (composite_cfg_74a, composite_cfg, clk_chipset);
+    synch_3 #(.WIDTH(2)) s_opl2_cfg       (osd_opl2,          opl2_cfg,      clk_chipset);
+    synch_3 #(.WIDTH(2)) s_boost_cfg      (osd_boost,         boost_cfg,     clk_chipset);
+    synch_3 #(.WIDTH(2)) s_spk_vol_cfg    (osd_spk_vol,       spk_vol_cfg,   clk_chipset);
+    synch_3              s_composite_cfg  (osd_composite,     composite_cfg, clk_chipset);
+    synch_3              s_ems_en_cfg     (osd_ems,           ems_en_cfg,    clk_chipset);
+    synch_3 #(.WIDTH(2)) s_ems_frame_cfg  (osd_ems_frame,     ems_frame_cfg, clk_chipset);
+    synch_3              s_a000_en_cfg    (osd_a000,          a000_en_cfg,   clk_chipset);
     synch_3 #(.WIDTH(8)) s_key_a          (key_a_74a,         key_a,         clk_chipset);
     synch_3 #(.WIDTH(8)) s_key_b          (key_b_74a,         key_b,         clk_chipset);
     synch_3 #(.WIDTH(8)) s_key_x          (key_x_74a,         key_x,         clk_chipset);
     synch_3 #(.WIDTH(8)) s_key_y          (key_y_74a,         key_y,         clk_chipset);
     synch_3               s_gamepad       (gamepad_74a,       gamepad,       clk_chipset);
+    synch_3 #(.WIDTH(8))  s_select_cfg    (select_cfg_74a,    select_cfg,    clk_chipset);
+    synch_3 #(.WIDTH(8))  s_start_cfg     (start_cfg_74a,     start_cfg,     clk_chipset);
     synch_3 #(.WIDTH(16)) s_cont1_chip    (cont1_key,         cont1_key_chip, clk_chipset);
-    synch_3 #(.WIDTH(3)) s_palette_cfg    (palette_cfg_74a,   palette_cfg,   clk_pix);
+    synch_3 #(.WIDTH(3)) s_palette_cfg    (osd_palette,       palette_cfg,   clk_pix);
     wire credits_mode_pix;
     wire credits_mode_chip;
     synch_3 s_credits_pix  (credits_active_74a, credits_mode_pix,  clk_pix);
@@ -588,10 +620,20 @@ module core_top (
     wire        target_dataslot_done;
     wire  [2:0] target_dataslot_err;
 
-    // Data table: unused, tied off.
-    wire [9:0]  datatable_addr             = 10'd0;
-    wire        datatable_wren             = 1'b0;
-    wire [31:0] datatable_data             = 32'd0;
+    // Data table (dataslot ID/size). APF loads each slot's size here and reads it back at the
+    // nonvolatile flush; a slot whose size reads 0 is treated as unused and never flushed. The
+    // Settings save does not exist on first boot, so its loaded size is 0 - declare it here.
+    // Written continuously, since APF also writes this table at load. Indexed by slot INDEX
+    // (position in data.json), two words per slot (id, size); the Settings slot is index 5, so its
+    // size word is at 5*2+1 = 11, and the file is 64 bytes.
+    reg  [9:0]  datatable_addr = 10'd11;
+    reg         datatable_wren = 1'b0;
+    reg  [31:0] datatable_data = 32'd64;
+    always @(posedge clk_74a) begin
+        datatable_wren <= 1'b1;
+        datatable_addr <= 10'd11;
+        datatable_data <= 32'd64;
+    end
 
     core_bridge_cmd icb (
         .clk                       (clk_74a),
@@ -725,8 +767,20 @@ module core_top (
     wire [3:0] osd_palette_idx;
     wire       osd_in_area;
     wire       osd_active;
+    wire       osd_reset_req;
+    wire       osd_credits_req;
     wire [8:0] vkb_key;
     wire       vkb_stb;
+    wire [2:0] osd_palette;
+    wire [1:0] osd_cpu_speed;
+    wire [1:0] osd_bios_wr;
+    wire [1:0] osd_opl2;
+    wire [1:0] osd_boost;
+    wire [1:0] osd_spk_vol;
+    wire       osd_composite;
+    wire       osd_ems;
+    wire [1:0] osd_ems_frame;
+    wire       osd_a000;
 
     softcpu_subsystem u_softcpu (
         .clk_sys                    (clk_chipset),
@@ -770,9 +824,25 @@ module core_top (
         .osd_in_area                (osd_in_area),
 
         .cont1_key                  (cont1_key_chip),
+        .select_fn                  (select_fn),
+        .start_fn                   (start_fn),
+        .credits_active             (credits_mode_chip),
+        .osd_open_req               (osd_open_req),
         .osd_active                 (osd_active),
+        .osd_reset_req              (osd_reset_req),
+        .osd_credits_req            (osd_credits_req),
         .vkb_key                    (vkb_key),
-        .vkb_stb                    (vkb_stb)
+        .vkb_stb                    (vkb_stb),
+        .osd_palette                (osd_palette),
+        .osd_cpu_speed              (osd_cpu_speed),
+        .osd_bios_wr                (osd_bios_wr),
+        .osd_opl2                   (osd_opl2),
+        .osd_boost                  (osd_boost),
+        .osd_spk_vol                (osd_spk_vol),
+        .osd_composite              (osd_composite),
+        .osd_ems                    (osd_ems),
+        .osd_ems_frame              (osd_ems_frame),
+        .osd_a000                   (osd_a000)
     );
 
     // ---- ROM-load download tracking ----
@@ -1084,7 +1154,7 @@ module core_top (
             casez (bios_load_state)
                 4'h00:
                 begin
-                    bios_protect_flag   <= ~status[31:30];  // bios_writable
+                    bios_protect_flag   <= ~bios_wr_cfg;  // bios_writable
                     bios_access_address <= 20'hFFFFF;
                     bios_write_data     <= 16'hFFFF;
                     bios_write_n        <= 1'b1;
@@ -1362,8 +1432,8 @@ module core_top (
     wire enable_hgc_sel = `ENABLE_HGC ? 1'b1 : 1'b0;
     wire [1:0] hgc_rgb_sel = `ENABLE_HGC ? 2'b10 : 2'b00;
     wire hercules_hw_sel = `ENABLE_HGC ? hercules_hw : 1'b0;
-    wire ems_enabled_sel = `ENABLE_EMS ? ~status[11] : 1'b0;
-    wire [1:0] ems_address_sel = `ENABLE_EMS ? status[13:12] : 2'b00;
+    wire ems_enabled_sel = `ENABLE_EMS ? ems_en_cfg : 1'b0;
+    wire [1:0] ems_address_sel = `ENABLE_EMS ? ems_frame_cfg : 2'b00;
 
     always @(posedge clk_chipset)
     begin
@@ -1383,13 +1453,15 @@ module core_top (
         .reset        (reset),
         .buttons      (cont1_key),
         .gamepad      (gamepad),
-        .osd_active   (osd_active),
+        .osd_active   (osd_active | credits_mode_chip),
         .vkb_key      (vkb_key),
         .vkb_stb      (vkb_stb),
         .cfg_a        (key_a),
         .cfg_b        (key_b),
         .cfg_x        (key_x),
         .cfg_y        (key_y),
+        .cfg_select   (select_key),
+        .cfg_start    (start_key),
         .cont3_joy    (cont3_joy),
         .cont3_trig   (cont3_trig),
         .cont3_key    (cont3_key),
@@ -1620,7 +1692,7 @@ module core_top (
     wire [16:0] jtopl2_snd = {jtopl2_snd_e[15], jtopl2_snd_e};
     wire [10:0] tandy_snd_e;
     wire [16:0] tandy_snd = `ENABLE_TANDY_AUDIO ? {{{2{tandy_snd_e[10]}}, {4{tandy_snd_e[10]}}, tandy_snd_e} << status[35:34], 2'b00} : 17'd0;
-    wire [16:0] spk_vol =  {2'b00, {3'b000,~speaker_out} << status[33:32], 11'd0};
+    wire [16:0] spk_vol =  {2'b00, {3'b000,~speaker_out} << spk_vol_cfg, 11'd0};
     wire        speaker_out;
 
     localparam [3:0] comp_f1 = 4;
@@ -1849,6 +1921,7 @@ module core_top (
             4'd6:    osd_color = 24'hFFFFFF;   // cursor
             4'd7:    osd_color = 24'h30C030;   // latched
             4'd8:    osd_color = 24'h90FF90;   // latched under cursor
+            4'd9:    osd_color = 24'h8C8578;   // disabled (dimmed label)
             default: osd_color = 24'h000000;
         endcase
     end

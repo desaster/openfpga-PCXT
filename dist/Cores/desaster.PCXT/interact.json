@@ -3,31 +3,6 @@
     "magic": "APF_VER_1",
     "variables": [
       {
-        "name": "Reset & Apply",
-        "id": 1,
-        "type": "action",
-        "enabled": true,
-        "writeonly": true,
-        "address": "0x50",
-        "value": 1
-      },
-      {
-        "name": "CPU Speed",
-        "id": 2,
-        "type": "list",
-        "enabled": true,
-        "persist": true,
-        "writeonly": true,
-        "address": "0x60",
-        "defaultval": 0,
-        "options": [
-          { "value": 0, "name": "4.77 MHz" },
-          { "value": 1, "name": "7.16 MHz" },
-          { "value": 2, "name": "9.54 MHz" },
-          { "value": 3, "name": "PC/AT 3.5 MHz" }
-        ]
-      },
-      {
         "name": "Write Protect",
         "id": 3,
         "type": "list",
@@ -44,67 +19,17 @@
         ]
       },
       {
-        "name": "Display",
-        "id": 4,
+        "name": "Gamepad Mode",
+        "id": 13,
         "type": "list",
         "enabled": true,
         "persist": true,
         "writeonly": true,
-        "address": "0x64",
+        "address": "0x90",
         "defaultval": 0,
         "options": [
-          { "value": 0, "name": "Full Color" },
-          { "value": 1, "name": "Green" },
-          { "value": 2, "name": "Amber" },
-          { "value": 3, "name": "B&W" },
-          { "value": 4, "name": "Red" },
-          { "value": 5, "name": "Blue" },
-          { "value": 6, "name": "Fuchsia" },
-          { "value": 7, "name": "Purple" }
-        ]
-      },
-      {
-        "name": "Composite",
-        "id": 14,
-        "type": "list",
-        "enabled": true,
-        "persist": true,
-        "writeonly": true,
-        "address": "0x7C",
-        "defaultval": 0,
-        "options": [
-          { "value": 0, "name": "Off" },
-          { "value": 1, "name": "On" }
-        ]
-      },
-      {
-        "name": "OPL2 Audio",
-        "id": 5,
-        "type": "list",
-        "enabled": true,
-        "persist": true,
-        "writeonly": true,
-        "address": "0x70",
-        "defaultval": 0,
-        "options": [
-          { "value": 0, "name": "Adlib 388h" },
-          { "value": 1, "name": "SB FM 388h/228h" },
-          { "value": 2, "name": "Disabled" }
-        ]
-      },
-      {
-        "name": "Audio Boost",
-        "id": 6,
-        "type": "list",
-        "enabled": true,
-        "persist": true,
-        "writeonly": true,
-        "address": "0x74",
-        "defaultval": 0,
-        "options": [
-          { "value": 0, "name": "None" },
-          { "value": 1, "name": "2x" },
-          { "value": 2, "name": "4x" }
+          { "value": 0, "name": "Keyboard" },
+          { "value": 1, "name": "Joystick" }
         ]
       },
       {
@@ -188,17 +113,36 @@
         ]
       },
       {
-        "name": "Gamepad Mode",
-        "id": 13,
+        "name": "Button Select",
+        "id": 14,
         "type": "list",
         "enabled": true,
         "persist": true,
         "writeonly": true,
-        "address": "0x90",
-        "defaultval": 0,
+        "address": "0x94",
+        "defaultval": 1,
         "options": [
-          { "value": 0, "name": "Keyboard" },
-          { "value": 1, "name": "Joystick" }
+          { "value": "0x00", "name": "None" },
+          { "value": "0xF1", "name": "Settings" },
+          { "value": "0x76", "name": "Esc" },
+          { "value": "0x0D", "name": "Tab" },
+          { "value": "0x58", "name": "Caps Lock" }
+        ]
+      },
+      {
+        "name": "Button Start",
+        "id": 15,
+        "type": "list",
+        "enabled": true,
+        "persist": true,
+        "writeonly": true,
+        "address": "0x98",
+        "defaultval": 1,
+        "options": [
+          { "value": "0x00", "name": "None" },
+          { "value": "0xF2", "name": "Pause/Credits" },
+          { "value": "0x5A", "name": "Enter" },
+          { "value": "0x29", "name": "Space" }
         ]
       },
       {
@@ -222,6 +166,24 @@
         "enabled": true,
         "writeonly": true,
         "address": "0x78",
+        "value": 1
+      },
+      {
+        "name": "Extra Options",
+        "id": 2,
+        "type": "action",
+        "enabled": true,
+        "writeonly": true,
+        "address": "0x54",
+        "value": 1
+      },
+      {
+        "name": "Reset & Apply",
+        "id": 1,
+        "type": "action",
+        "enabled": true,
+        "writeonly": true,
+        "address": "0x50",
         "value": 1
       }
     ]

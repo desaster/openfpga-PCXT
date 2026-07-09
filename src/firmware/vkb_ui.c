@@ -1,3 +1,4 @@
+#include "settings_ui.h"
 #include "softcpu_regs.h"
 #include "vkb_draw.h"
 #include "vkb_layout.h"
@@ -29,10 +30,15 @@ static inline uint32_t rdcycle(void)
     return c;
 }
 
+// Which overlay is on screen; the two are mutually exclusive and drawn on demand.
+enum { OSD_NONE = 0, OSD_VKB, OSD_SETTINGS };
+
 static osd_fb_t osd;
 static uint16_t ui_prev;          // previous button state, for edge detection
-static uint8_t ui_active;         // OSD shown
-static uint8_t ui_osd_top;        // OSD at the top of the screen instead of the bottom
+static uint8_t ui_mode;           // OSD_NONE / OSD_VKB / OSD_SETTINGS
+static uint8_t credits_shown;     // credits overlay up (latches core_top's flag across the dismiss)
+static uint8_t osd_open_prev;     // previous interact "Extra Options" request, for edge detection
+static uint8_t ui_osd_top;        // VKB at the top of the screen instead of the bottom
 static int cur_key;               // selected key index
 static int cur_vrow;              // selected visual row
 static int held_key;              // key momentarily held by button A, -1 = none
@@ -48,10 +54,10 @@ static void vkb_emit(int make, uint8_t scancode)
     *VKB_KEY = ((uint32_t) (make ? 1 : 0) << 8) | scancode;
 }
 
-// OSD control word: bit0 = overlay shown. Position is set by where vkb_draw_keyboard draws.
-static void vkb_ctrl_write(void)
+// OSD control word: bit0 = an overlay is shown. Position is set by where the overlay is drawn.
+static void osd_ctrl_write(void)
 {
-    *VKB_CTRL = ui_active ? 1u : 0u;
+    *VKB_CTRL = (ui_mode != OSD_NONE) ? 1u : 0u;
 }
 
 static int is_latched(int i)
@@ -152,7 +158,7 @@ void vkb_ui_init(void)
     ui_osd_top = 0;
     osd.y0 = ui_osd_top ? VKB_Y_TOP : VKB_Y_BOTTOM;
     latch_bits[0] = latch_bits[1] = latch_bits[2] = 0;
-    vkb_draw_keyboard(&osd, cur_key);
+    ui_mode = OSD_NONE; // nothing is shown until an overlay is opened
 }
 
 // Busy-wait one break (two byte-times) so a batch of breaks cannot outpace KFPS2KB's
@@ -188,19 +194,83 @@ static void vkb_release_all(void)
     }
 }
 
+// Force the settings OSD open from any mode; used by the Select button and the interact opener.
+static void osd_enter_settings(void)
+{
+    vkb_release_all(); // drop any held keyboard keys before switching overlays
+    ui_mode = OSD_SETTINGS;
+    settings_open();
+    osd_ctrl_write();
+}
+
+// Run a Select/Start button's configured OSD function. Key-mapped buttons carry fn = None and
+// type through pocket_keyboard instead.
+static void button_function(uint8_t fn)
+{
+    switch (fn) {
+    case BTNFN_SETTINGS:
+        if (ui_mode == OSD_SETTINGS) {
+            ui_mode = OSD_NONE;
+            osd_ctrl_write();
+        } else {
+            osd_enter_settings();
+        }
+        break;
+    case BTNFN_CREDITS:
+        vkb_release_all();
+        ui_mode = OSD_NONE; // close any overlay so the credits scroll shows on a clean screen
+        osd_ctrl_write();
+        settings_show_credits();
+        break;
+    default: // BTNFN_NONE
+        break;
+    }
+}
+
 void vkb_ui_tick(void)
 {
-    uint16_t buttons = *CONT1_KEY;
+    uint32_t raw = *CONT1_KEY;
+    uint16_t buttons = raw & 0xFFFF;
+
+    // While the credits overlay is up, any button dismisses it (core_top does that); swallow input
+    // here so the dismissing press doesn't also run a button function or re-trigger credits.
+    // credits_shown latches the flag so the press is caught even as core_top clears it the same
+    // tick.
+    if (credits_shown || CONT1_CREDITS(raw)) {
+        credits_shown = CONT1_CREDITS(raw) != 0;
+        ui_prev = buttons;
+        return;
+    }
+
+    // The interact "Extra Options" action force-opens the settings OSD, edge-detected so closing it
+    // within the request window doesn't reopen. The guaranteed opener regardless of Button Select.
+    uint8_t osd_open = CONT1_OSD_OPEN(raw) != 0;
+    if (osd_open && !osd_open_prev) {
+        osd_enter_settings();
+    }
+    osd_open_prev = osd_open;
+
     uint16_t pressed = buttons & ~ui_prev;
     uint16_t released = ~buttons & ui_prev;
     ui_prev = buttons;
 
+    // L1 toggles the keyboard; Select/Start run their configured OSD function (Settings or credits
+    // by default). When mapped to a key instead, fn is None and pocket_keyboard types the key.
     if (pressed & BTN_L1) {
-        ui_active = !ui_active;
-        if (!ui_active) {
+        if (ui_mode == OSD_VKB) {
             vkb_release_all(); // nothing stays down after closing
+            ui_mode = OSD_NONE;
+        } else {
+            ui_mode = OSD_VKB;
+            vkb_draw_keyboard(&osd, cur_key);
         }
-        vkb_ctrl_write();
+        osd_ctrl_write();
+    }
+    if (pressed & BTN_SELECT) {
+        button_function(CONT1_SEL_FN(raw));
+    }
+    if (pressed & BTN_START) {
+        button_function(CONT1_START_FN(raw));
     }
 
     // Release the momentary key when A is let go, so its make is matched by a break.
@@ -209,14 +279,22 @@ void vkb_ui_tick(void)
         held_key = -1;
     }
 
+    if (ui_mode == OSD_SETTINGS) {
+        if (settings_input(pressed)) { // nonzero = user dismissed the overlay
+            ui_mode = OSD_NONE;
+            osd_ctrl_write();
+        }
+        return;
+    }
+
     // Navigation and the key buttons are suspended while a momentary key is held:
     // a make/break scancode key cannot be momentary and latched at once, so the two
     // are kept apart.
-    if (ui_active && held_key < 0) {
+    if (ui_mode == OSD_VKB && held_key < 0) {
         if (pressed & BTN_B) { // close the keyboard
-            ui_active = 0;
             vkb_release_all();
-            vkb_ctrl_write();
+            ui_mode = OSD_NONE;
+            osd_ctrl_write();
             return;
         }
         if (pressed & BTN_R1) { // swap the OSD between bottom and top, redrawing at the new spot
