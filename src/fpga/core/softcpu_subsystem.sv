@@ -95,7 +95,11 @@ module softcpu_subsystem (
     output        osd_composite,
     output        osd_ems,
     output  [1:0] osd_ems_frame,
-    output        osd_a000
+    output        osd_a000,
+    output  [1:0] osd_joy1,
+    output  [1:0] osd_joy2,
+    output        osd_swapjoy,
+    output        osd_syncjoy
 );
 
     //
@@ -221,6 +225,10 @@ module softcpu_subsystem (
     localparam SET_IDX_EMS       = 5'd9;
     localparam SET_IDX_EMS_FRAME = 5'd10;
     localparam SET_IDX_A000      = 5'd11;
+    localparam SET_IDX_JOY1      = 5'd12;
+    localparam SET_IDX_JOY2      = 5'd13;
+    localparam SET_IDX_SWAPJOY   = 5'd14;
+    localparam SET_IDX_SYNCJOY   = 5'd15;
     reg [7:0] osd_settings [0:31];
     wire settings_wr = sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[3:2] == 2'd3;
     integer si;
@@ -243,6 +251,10 @@ module softcpu_subsystem (
     assign osd_ems       = osd_settings[SET_IDX_EMS][0];
     assign osd_ems_frame = osd_settings[SET_IDX_EMS_FRAME][1:0];
     assign osd_a000      = osd_settings[SET_IDX_A000][0];
+    assign osd_joy1      = osd_settings[SET_IDX_JOY1][1:0];
+    assign osd_joy2      = osd_settings[SET_IDX_JOY2][1:0];
+    assign osd_swapjoy   = osd_settings[SET_IDX_SWAPJOY][0];
+    assign osd_syncjoy   = osd_settings[SET_IDX_SYNCJOY][0];
 
     //
     // Memory ready. The ROM read is registered, so it needs two clk_pico cycles;

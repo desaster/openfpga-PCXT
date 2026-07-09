@@ -95,10 +95,10 @@ static setting_t settings[SET_COUNT] = {
     SETTING_D(opt_dis_en, 1),      // SET_EMS (default Enabled, as the fixed memory map was)
     SETTING(opt_ems_frame),        // SET_EMS_FRAME
     SETTING_D(opt_dis_en, 1),      // SET_A000 (default Enabled)
-    SETTING_LOCKED(opt_joy, 2),    // SET_JOY1
-    SETTING_LOCKED(opt_joy, 2),    // SET_JOY2
-    SETTING_LOCKED(opt_no_yes, 0), // SET_SWAPJOY
-    SETTING_LOCKED(opt_no_yes, 0), // SET_SYNCJOY
+    SETTING_D(opt_joy, 1),         // SET_JOY1 (default Digital; built-in pad has no stick)
+    SETTING_D(opt_joy, 2),         // SET_JOY2 (default Disabled)
+    SETTING(opt_no_yes),           // SET_SWAPJOY
+    SETTING(opt_no_yes),           // SET_SYNCJOY
 };
 
 // Compiled defaults, snapshotted at boot before the save is adopted, for Reset to Defaults.
@@ -328,7 +328,7 @@ int settings_input(uint16_t pressed)
 // softcore only keeps it current. Layout: word0 magic, word1 {version[7:0], count[15:8]}, then the
 // values packed four per word.
 #define SETTINGS_MAGIC   0x50435853u
-#define SETTINGS_VERSION 1u
+#define SETTINGS_VERSION 2u
 #define SETTINGS_WORD    128
 
 void settings_load(void)

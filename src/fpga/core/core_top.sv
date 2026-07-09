@@ -339,11 +339,14 @@ module core_top (
     wire [7:0]  select_key = (select_cfg < 8'hF0) ? select_cfg : 8'h00;
     wire [7:0]  start_key  = (start_cfg  < 8'hF0) ? start_cfg  : 8'h00;
     wire [15:0] cont1_key_chip;
+    wire [15:0] cont2_key_chip;
+    wire [31:0] cont1_joy_chip, cont2_joy_chip;
 
-    // Game port P1 stays enabled so games always detect a joystick, like a real
-    // always-present port. It reads centered until Gamepad Mode routes the D-pad in.
-    // joy_opts [4]=turbo-track CPU speed [3]=P2 off [1]=P1 off [0]=P1 digital.
-    wire [4:0]  joy_opts = 5'b11001;
+    // Game-port options from the settings OSD: [4]=Sync-to-CPU turbo timing, [3:2]=Joystick 2,
+    // [1:0]=Joystick 1; each 2-bit field is 0=Analog, 1=Digital, 2=Disabled.
+    wire [1:0]  joy1_cfg, joy2_cfg;
+    wire        swapjoy_cfg, syncjoy_cfg;
+    wire [4:0]  joy_opts = {syncjoy_cfg, joy2_cfg, joy1_cfg};
 
     wire composite_cfg;   // CGA composite colour decode (settings bank, 0x7C)
     wire composite = composite_cfg | xtctl[0];
@@ -391,16 +394,29 @@ module core_top (
     // it hands Set-2 bytes to CHIPSET over kb_byte/kb_valid/kb_ready. Mouse input idle.
     assign ps2_mouse_clk_out  = 1'b1;   // CHIPSET mouse input, idle
     assign ps2_mouse_data_out = 1'b1;
-    // joy0 bits: [5]=fire2 [4]=fire1 [3]=up [2]=down [1]=left [0]=right. Held off while
-    // the virtual keyboard is open so navigating it does not also steer the game.
-    assign joy0  = (gamepad && !osd_active)
-                 ? {8'd0, cont1_key_chip[5], cont1_key_chip[4],
-                          cont1_key_chip[0], cont1_key_chip[1],
-                          cont1_key_chip[2], cont1_key_chip[3]}
-                 : 14'd0;
-    assign joy1  = 14'd0;
-    assign joya0 = 16'd0;
-    assign joya1 = 16'd0;
+    // Pocket controllers -> game-port inputs. Digital bits: [5]=fire2 [4]=fire1 [3]=up [2]=down
+    // [1]=left [0]=right, from cont key bits [0]=up [1]=down [2]=left [3]=right [4]=A [5]=B.
+    wire [13:0] cont1_dig = {8'd0, cont1_key_chip[5], cont1_key_chip[4],
+                                   cont1_key_chip[0], cont1_key_chip[1],
+                                   cont1_key_chip[2], cont1_key_chip[3]};
+    wire [13:0] cont2_dig = {8'd0, cont2_key_chip[5], cont2_key_chip[4],
+                                   cont2_key_chip[0], cont2_key_chip[1],
+                                   cont2_key_chip[2], cont2_key_chip[3]};
+    // Left stick -> module analog. The Pocket sends unsigned axes centred on 0x80; the port wants
+    // signed centred on 0, so flip the top bit. An analog-less pad reports all-zero on every axis,
+    // which the guard passes through as centre (a raw 0 would otherwise convert to full deflection).
+    wire [15:0] cont1_ana = (cont1_joy_chip == 32'd0) ? 16'd0
+                          : {cont1_joy_chip[15:8] ^ 8'h80, cont1_joy_chip[7:0] ^ 8'h80};
+    wire [15:0] cont2_ana = (cont2_joy_chip == 32'd0) ? 16'd0
+                          : {cont2_joy_chip[15:8] ^ 8'h80, cont2_joy_chip[7:0] ^ 8'h80};
+    // Controller 1 reaches the port only in Gamepad Mode (else its buttons type keys); controller 2
+    // is always player 2. Both idle while an OSD panel is open, and a Disabled port sends nothing.
+    wire        p1_on = gamepad && !osd_active && (joy1_cfg != 2'd2);
+    wire        p2_on = !osd_active && (joy2_cfg != 2'd2);
+    assign joy0  = p1_on ? cont1_dig : 14'd0;
+    assign joy1  = p2_on ? cont2_dig : 14'd0;
+    assign joya0 = p1_on ? cont1_ana : 16'd0;
+    assign joya1 = p2_on ? cont2_ana : 16'd0;
 
     // ROM load: data_loader + FIFO + copier drive ioctl_* in the ROM-LOAD
     // section below; the reused BIOS FSM consumes them.
@@ -555,6 +571,10 @@ module core_top (
     synch_3              s_ems_en_cfg     (osd_ems,           ems_en_cfg,    clk_chipset);
     synch_3 #(.WIDTH(2)) s_ems_frame_cfg  (osd_ems_frame,     ems_frame_cfg, clk_chipset);
     synch_3              s_a000_en_cfg    (osd_a000,          a000_en_cfg,   clk_chipset);
+    synch_3 #(.WIDTH(2)) s_joy1_cfg       (osd_joy1,          joy1_cfg,      clk_chipset);
+    synch_3 #(.WIDTH(2)) s_joy2_cfg       (osd_joy2,          joy2_cfg,      clk_chipset);
+    synch_3              s_swapjoy_cfg    (osd_swapjoy,       swapjoy_cfg,   clk_chipset);
+    synch_3              s_syncjoy_cfg    (osd_syncjoy,       syncjoy_cfg,   clk_chipset);
     synch_3 #(.WIDTH(8)) s_key_a          (key_a_74a,         key_a,         clk_chipset);
     synch_3 #(.WIDTH(8)) s_key_b          (key_b_74a,         key_b,         clk_chipset);
     synch_3 #(.WIDTH(8)) s_key_x          (key_x_74a,         key_x,         clk_chipset);
@@ -563,6 +583,9 @@ module core_top (
     synch_3 #(.WIDTH(8))  s_select_cfg    (select_cfg_74a,    select_cfg,    clk_chipset);
     synch_3 #(.WIDTH(8))  s_start_cfg     (start_cfg_74a,     start_cfg,     clk_chipset);
     synch_3 #(.WIDTH(16)) s_cont1_chip    (cont1_key,         cont1_key_chip, clk_chipset);
+    synch_3 #(.WIDTH(16)) s_cont2_chip    (cont2_key,         cont2_key_chip, clk_chipset);
+    synch_3 #(.WIDTH(32)) s_cont1_joy     (cont1_joy,         cont1_joy_chip, clk_chipset);
+    synch_3 #(.WIDTH(32)) s_cont2_joy     (cont2_joy,         cont2_joy_chip, clk_chipset);
     synch_3 #(.WIDTH(3)) s_palette_cfg    (osd_palette,       palette_cfg,   clk_pix);
     wire credits_mode_pix;
     wire credits_mode_chip;
@@ -781,6 +804,10 @@ module core_top (
     wire       osd_ems;
     wire [1:0] osd_ems_frame;
     wire       osd_a000;
+    wire [1:0] osd_joy1;
+    wire [1:0] osd_joy2;
+    wire       osd_swapjoy;
+    wire       osd_syncjoy;
 
     softcpu_subsystem u_softcpu (
         .clk_sys                    (clk_chipset),
@@ -842,7 +869,11 @@ module core_top (
         .osd_composite              (osd_composite),
         .osd_ems                    (osd_ems),
         .osd_ems_frame              (osd_ems_frame),
-        .osd_a000                   (osd_a000)
+        .osd_a000                   (osd_a000),
+        .osd_joy1                   (osd_joy1),
+        .osd_joy2                   (osd_joy2),
+        .osd_swapjoy                (osd_swapjoy),
+        .osd_syncjoy                (osd_syncjoy)
     );
 
     // ---- ROM-load download tracking ----
@@ -1545,10 +1576,10 @@ module core_top (
 		.ps2_mouseclk_out                   (ps2_mouse_clk_in),
 		.ps2_mousedat_out                   (ps2_mouse_data_in),
 		.joy_opts                           (joy_opts),           //Joy0-Disabled, Joy0-Type, Joy1-Disabled, Joy1-Type, turbo_sync
-		.joy0                               (status[28] ? joy1 : joy0),
-		.joy1                               (status[28] ? joy0 : joy1),
-		.joya0                              (status[28] ? joya1 : joya0),
-		.joya1                              (status[28] ? joya0 : joya1),
+		.joy0                               (swapjoy_cfg ? joy1 : joy0),
+		.joy1                               (swapjoy_cfg ? joy0 : joy1),
+		.joya0                              (swapjoy_cfg ? joya1 : joya0),
+		.joya1                              (swapjoy_cfg ? joya0 : joya1),
 		.jtopl2_snd_e                       (jtopl2_snd_e),
 		.tandy_snd_e                        (tandy_snd_e),
 		.opl2_io                            (xtctl[4] ? 2'b10 : opl2_cfg),
