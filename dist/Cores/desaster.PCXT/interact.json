@@ -124,6 +124,7 @@
         "options": [
           { "value": "0x00", "name": "None" },
           { "value": "0xF1", "name": "Settings" },
+          { "value": "0xF3", "name": "CGA/HGC" },
           { "value": "0x76", "name": "Esc" },
           { "value": "0x0D", "name": "Tab" },
           { "value": "0x58", "name": "Caps Lock" }

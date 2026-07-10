@@ -1294,7 +1294,7 @@ end
 
 
     defparam cga1.BLINK_MAX = 24'd4772727;
-    defparam hgc1.BLINK_MAX = 24'd9100000;
+    defparam hgc1.BLINK_MAX = 24'd5166000;
     wire [7:0] cga_vram_cpu_dout;
     wire [7:0] hgc_vram_cpu_dout;
 

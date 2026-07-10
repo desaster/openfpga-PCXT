@@ -54,6 +54,7 @@ enum {
     SET_JOY2,
     SET_SWAPJOY,
     SET_SYNCJOY,
+    SET_VIDEO_1ST,
     SET_COUNT
 };
 
@@ -70,6 +71,7 @@ static const char *const opt_display[] = { "Full Color", "Green", "Amber", "B&W"
 static const char *const opt_ems_frame[] = { "C000", "D000", "E000" };
 static const char *const opt_joy[] = { "Analog", "Digital", "Disabled" };
 static const char *const opt_no_yes[] = { "No", "Yes" };
+static const char *const opt_video_1st[] = { "CGA", "Hercules" };
 
 typedef struct {
     const char *const *opts;
@@ -99,6 +101,7 @@ static setting_t settings[SET_COUNT] = {
     SETTING_D(opt_joy, 2),         // SET_JOY2 (default Disabled)
     SETTING(opt_no_yes),           // SET_SWAPJOY
     SETTING(opt_no_yes),           // SET_SYNCJOY
+    SETTING(opt_video_1st),        // SET_VIDEO_1ST (applied by the BIOS at the next Reset PC)
 };
 
 // Compiled defaults, snapshotted at boot before the save is adopted, for Reset to Defaults.
@@ -128,6 +131,7 @@ static const item_t items_main[] = {
 
 static const item_t items_system[] = {
     { "CPU Speed", IT_OPTION, SET_CPU_SPEED },
+    { "1st Video", IT_OPTION, SET_VIDEO_1ST },
     { "BIOS Writable", IT_OPTION, SET_BIOS_WR },
 };
 

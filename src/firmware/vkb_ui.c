@@ -222,6 +222,10 @@ static void button_function(uint8_t fn)
         osd_ctrl_write();
         settings_show_credits();
         break;
+    case BTNFN_VIDEO:
+        *OSD_ACTION = 0;             // re-arm the edge
+        *OSD_ACTION = OSD_ACT_VIDEO; // rising edge -> toggle the displayed video card
+        break;
     default: // BTNFN_NONE
         break;
     }

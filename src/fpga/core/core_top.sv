@@ -331,11 +331,14 @@ module core_top (
     // game port over the keyboard.
     wire [7:0]  key_a, key_b, key_x, key_y;
     wire        gamepad;
-    // Button Select/Start config: 0xF1=Settings, 0xF2=Pause/Credits, other = Set-2 key. Split into
-    // a 2-bit OSD function for the softcore and a key scancode (0 for the functions) for the keyboard.
+    // Button Select/Start config: 0xF1=Settings, 0xF2=Pause/Credits, 0xF3=CGA/HGC toggle,
+    // other = Set-2 key. Split into an OSD function id for the softcore and a key scancode
+    // (0 for the functions) for the keyboard.
     wire [7:0]  select_cfg, start_cfg;
-    wire [3:0]  select_fn  = (select_cfg == 8'hF1) ? 4'd1 : (select_cfg == 8'hF2) ? 4'd2 : 4'd0;
-    wire [3:0]  start_fn   = (start_cfg  == 8'hF1) ? 4'd1 : (start_cfg  == 8'hF2) ? 4'd2 : 4'd0;
+    wire [3:0]  select_fn  = (select_cfg == 8'hF1) ? 4'd1 : (select_cfg == 8'hF2) ? 4'd2 :
+                             (select_cfg == 8'hF3) ? 4'd3 : 4'd0;
+    wire [3:0]  start_fn   = (start_cfg  == 8'hF1) ? 4'd1 : (start_cfg  == 8'hF2) ? 4'd2 :
+                             (start_cfg  == 8'hF3) ? 4'd3 : 4'd0;
     wire [7:0]  select_key = (select_cfg < 8'hF0) ? select_cfg : 8'h00;
     wire [7:0]  start_key  = (start_cfg  < 8'hF0) ? start_cfg  : 8'h00;
     wire [15:0] cont1_key_chip;
@@ -438,7 +441,7 @@ module core_top (
 
     wire clk_100;
     wire clk_28_636;
-    wire clk_57_272;
+    wire clk_32_514;
     reg clk_14_318 = 1'b0;
     wire clk_cpu;
     logic cpu_ce_posedge;
@@ -449,9 +452,14 @@ module core_top (
     localparam [27:0] cur_rate = 28'd50000000;
 
     wire clk_sdram_ph;
+    wire clk_pix_cga;
+    wire clk_pix_cga_90;
+    wire clk_pix_hgc;
+    wire clk_pix_hgc_90;
     wire clk_pix;
     wire clk_pix_90;
     wire pll_video_locked;
+    wire pll_video_hgc_locked;
 
     // System PLL: 50 MHz (chipset + SDRAM ctrl), 100 MHz (CPU), 50 MHz@ps (dram_clk).
     pll pll
@@ -464,18 +472,69 @@ module core_top (
         .locked   (pll_locked)
     );
 
-    // Video PLL: 28.636 MHz (CGA dot clock), 14.318 MHz pixel + 90-deg sibling.
+    // CGA video PLL: 28.636 MHz (CGA dot clock), 14.318 MHz pixel + 90-deg sibling.
     pll_video pll_video
     (
         .refclk   (clk_74a),
         .rst      (1'b0),
         .outclk_0 (clk_28_636),
-        .outclk_1 (clk_pix),
-        .outclk_2 (clk_pix_90),
+        .outclk_1 (clk_pix_cga),
+        .outclk_2 (clk_pix_cga_90),
         .locked   (pll_video_locked)
     );
-    // Global power-on reset until both PLLs lock.
-    wire RESET = ~pll_locked | ~pll_video_locked;
+
+    // Hercules video PLL: 32.514 MHz (HGC dot clock x2), 16.257 MHz pixel + 90-deg
+    // sibling. Referenced from clk_74b: the clk_74a pin reaches only the two
+    // bottom-edge fractional-PLL sites, and pll / pll_video occupy those.
+    pll_video_hgc pll_video_hgc
+    (
+        .refclk   (clk_74b),
+        .rst      (1'b0),
+        .outclk_0 (clk_32_514),
+        .outclk_1 (clk_pix_hgc),
+        .outclk_2 (clk_pix_hgc_90),
+        .locked   (pll_video_hgc_locked)
+    );
+
+    // The video back-end (palette tint -> credits -> OSD -> output regs and the
+    // scaler's video_rgb_clock) runs on whichever pixel pair matches the displayed
+    // card; the two card domains themselves never switch. swap_video (KFPS2KB's
+    // F11 toggle) drives this sequencer: blank the output, flip both clock muxes
+    // mid-window, un-blank once the scaler has seen frames of the new timing.
+    wire swap_video_chip;
+    synch_3 s_swap_video (swap_video, swap_video_chip, clk_chipset);
+    reg         pix_sel   = 1'b0;   // 0 = CGA pixel pair, 1 = HGC pixel pair
+    reg         vid_blank = 1'b0;   // forces DE low across the clock switch
+    reg  [21:0] pix_switch_cnt = 22'd0;
+    localparam  PIX_SWITCH_CYCLES = 22'd4000000;   // 80 ms: ~2 frames each side of the flip
+    always @(posedge clk_chipset) begin
+        if (pix_switch_cnt != 22'd0) begin
+            pix_switch_cnt <= pix_switch_cnt - 22'd1;
+            if (pix_switch_cnt == (PIX_SWITCH_CYCLES >> 1))
+                pix_sel <= swap_video_chip;
+            if (pix_switch_cnt == 22'd1)
+                vid_blank <= 1'b0;
+        end else if (swap_video_chip != pix_sel) begin
+            vid_blank      <= 1'b1;
+            pix_switch_cnt <= PIX_SWITCH_CYCLES;
+        end
+    end
+
+    cyclonev_clkselect u_pixclk_sw
+    (
+        .clkselect ({1'b1, pix_sel}),
+        .inclk     ({clk_pix_hgc, clk_pix_cga, 2'b00}),
+        .outclk    (clk_pix)
+    );
+    cyclonev_clkselect u_pixclk90_sw
+    (
+        .clkselect ({1'b1, pix_sel}),
+        .inclk     ({clk_pix_hgc_90, clk_pix_cga_90, 2'b00}),
+        .outclk    (clk_pix_90)
+    );
+
+    // Global power-on reset until all PLLs lock.
+    wire RESET = ~pll_locked | ~pll_video_locked | ~pll_video_hgc_locked;
     // ROM-load reset hold: keep the machine in reset while APF streams a slot,
     // and from power-on until the first load completes, so the CPU never runs
     // without a BIOS. The BIOS write path is on the separate reset_sdram, which
@@ -557,6 +616,7 @@ module core_top (
     wire       ems_en_cfg;
     wire [1:0] ems_frame_cfg;
     wire       a000_en_cfg;
+    wire       video_1st_cfg;
     // The OSD-driven display palette, synced into the clk_pix video domain for the output tint.
     wire [2:0] palette_cfg;
     synch_3              s_interact_reset (|interact_reset_delay, interact_reset, clk_chipset);
@@ -575,6 +635,7 @@ module core_top (
     synch_3 #(.WIDTH(2)) s_joy2_cfg       (osd_joy2,          joy2_cfg,      clk_chipset);
     synch_3              s_swapjoy_cfg    (osd_swapjoy,       swapjoy_cfg,   clk_chipset);
     synch_3              s_syncjoy_cfg    (osd_syncjoy,       syncjoy_cfg,   clk_chipset);
+    synch_3              s_video_1st_cfg  (osd_video_1st,     video_1st_cfg, clk_chipset);
     synch_3 #(.WIDTH(8)) s_key_a          (key_a_74a,         key_a,         clk_chipset);
     synch_3 #(.WIDTH(8)) s_key_b          (key_b_74a,         key_b,         clk_chipset);
     synch_3 #(.WIDTH(8)) s_key_x          (key_x_74a,         key_x,         clk_chipset);
@@ -792,6 +853,7 @@ module core_top (
     wire       osd_active;
     wire       osd_reset_req;
     wire       osd_credits_req;
+    wire       osd_video_req;
     wire [8:0] vkb_key;
     wire       vkb_stb;
     wire [2:0] osd_palette;
@@ -808,6 +870,7 @@ module core_top (
     wire [1:0] osd_joy2;
     wire       osd_swapjoy;
     wire       osd_syncjoy;
+    wire       osd_video_1st;
 
     softcpu_subsystem u_softcpu (
         .clk_sys                    (clk_chipset),
@@ -858,6 +921,7 @@ module core_top (
         .osd_active                 (osd_active),
         .osd_reset_req              (osd_reset_req),
         .osd_credits_req            (osd_credits_req),
+        .osd_video_req              (osd_video_req),
         .vkb_key                    (vkb_key),
         .vkb_stb                    (vkb_stb),
         .osd_palette                (osd_palette),
@@ -873,7 +937,8 @@ module core_top (
         .osd_joy1                   (osd_joy1),
         .osd_joy2                   (osd_joy2),
         .osd_swapjoy                (osd_swapjoy),
-        .osd_syncjoy                (osd_syncjoy)
+        .osd_syncjoy                (osd_syncjoy),
+        .osd_video_1st              (osd_video_1st)
     );
 
     // ---- ROM-load download tracking ----
@@ -905,10 +970,6 @@ module core_top (
 
     always @(posedge clk_28_636)
         clk_14_318 <= ~clk_14_318;   // 14.318 MHz toggle for splash / UART timing
-
-    // HGC is disabled; feed CHIPSET's unused HGC dot-clock from the CGA clock so
-    // the kept, unchanged CHIPSET instantiation still has a valid clock there.
-    assign clk_57_272 = clk_28_636;
 
     //////////////////////////////////////////////////////////////////
 
@@ -1001,7 +1062,7 @@ module core_top (
     begin
         if (reset)
         begin
-            hgc_mode <= `ENABLE_HGC ? (`ENABLE_CGA ? status[4] : 1'b1) : 1'b0;
+            hgc_mode <= `ENABLE_HGC ? (`ENABLE_CGA ? video_1st_cfg : 1'b1) : 1'b0;
             reset_cpu <= 1'b1;
             reset_cpu_count <= 16'h0000;
         end
@@ -1347,10 +1408,15 @@ module core_top (
     reg phys_reset_hold = 0;
     reg [23:0] phys_reset_cnt = 24'd0;
     localparam [23:0] PHYS_RESET_HOLD = 24'd2863600;
-    wire splash_on_14;
+    wire splash_on_14_cfg;
+    wire video_1st_14;
     wire bios_ever_loaded_14;
-    synch_3 s_splash_on      (splash_cfg_74a,   splash_on_14,        clk_14_318);
+    synch_3 s_splash_on      (splash_cfg_74a,   splash_on_14_cfg,    clk_14_318);
+    synch_3 s_video_1st_14   (osd_video_1st,    video_1st_14,        clk_14_318);
     synch_3 s_bios_loaded_14 (bios_ever_loaded, bios_ever_loaded_14, clk_14_318);
+    // The splash draws into CGA VRAM, so a Hercules boot skips it rather than
+    // holding the machine on a blank mono screen.
+    wire splash_on_14 = splash_on_14_cfg & ~video_1st_14;
 
     always @ (posedge clk_14_318)
     begin
@@ -1454,12 +1520,26 @@ module core_top (
 
     assign  sw_base = `ENABLE_HGC ? (hgc_mode ? 6'b111101 : 6'b101101) : 6'b101101;
     assign  sw_floppy = fdd_present[1] ? 2'b01 : 2'b00;
-    assign  sw = {sw_floppy, sw_base}; // DIP switches (CGA and floppy count)
+    assign  sw = {sw_floppy, sw_base}; // DIP switches (display type and floppy count)
     assign  port_c_in[3:0] = port_b_out[3] ? sw[7:4] : sw[3:0];
 
     wire tandy_bios_flag = bios_write_n ? `ROM_IS_TANDY : tandy_bios_write;
 
-    wire video_output_sel = `ENABLE_HGC ? hgc_mode_video_ff : 1'b0;
+    // Displayed card = the boot card XOR the Select-button CGA/HGC toggle. The toggle
+    // clears at machine reset, so a fresh POST always shows the 1st Video card.
+    reg  video_swap = 1'b0;
+    wire osd_video_req_chip;
+    synch_3 s_osd_video_req (osd_video_req, osd_video_req_chip, clk_chipset);
+    reg  osd_video_req_d = 1'b0;
+    always @(posedge clk_chipset) begin
+        osd_video_req_d <= osd_video_req_chip;
+        if (reset)
+            video_swap <= 1'b0;
+        else if (osd_video_req_chip & ~osd_video_req_d)
+            video_swap <= ~video_swap;
+    end
+
+    wire video_output_sel = `ENABLE_HGC ? (hgc_mode_video_ff ^ video_swap) : 1'b0;
     wire enable_hgc_sel = `ENABLE_HGC ? 1'b1 : 1'b0;
     wire [1:0] hgc_rgb_sel = `ENABLE_HGC ? 2'b10 : 2'b00;
     wire hercules_hw_sel = `ENABLE_HGC ? hercules_hw : 1'b0;
@@ -1525,7 +1605,7 @@ module core_top (
 		.video_output                       (video_output_sel),
 		.clk_vga_cga                        (clk_28_636),
 		.enable_cga                         (`ENABLE_CGA),
-		.clk_vga_hgc                        (clk_57_272),
+		.clk_vga_hgc                        (clk_32_514),
 		.enable_hgc                         (enable_hgc_sel),
 		.hgc_rgb                            (hgc_rgb_sel),
 	//	.de_o                               (VGA_DE),
@@ -1850,12 +1930,13 @@ module core_top (
     //
     ///////////////////////   VIDEO   ///////////////////////
     //
-    // Lean CGA -> Pocket scaler: the Pocket scaler does the scaling and filtering.
-    // DE/porches follow CHIPSET's CGA blanking as-is; display-mode selection is single-mode.
+    // Lean CGA/HGC -> Pocket scaler: the Pocket scaler does the scaling and filtering.
+    // DE/porches follow CHIPSET's blanking as-is.
     //
-    // r/g/b/HSync/VSync/HBlank/VBlank leave CHIPSET on the clk_28_636 dot-clock
-    // domain. clk_pix (14.318 MHz) is 28.636/2 off the same PLL, so it is phase-
-    // aligned and samples them cleanly, one pixel per edge.
+    // r/g/b/HSync/VSync/HBlank/VBlank leave CHIPSET on the displayed card's dot-clock
+    // domain (clk_28_636 CGA, clk_32_514 HGC). clk_pix is the matching half-rate
+    // sibling off the same PLL, phase-aligned and muxed together with it by the
+    // switch sequencer above, so it samples them cleanly, one pixel per edge.
 
     wire        HBlank;
     wire        HSync;
@@ -1888,6 +1969,63 @@ module core_top (
         endcase
     end
 
+    // Hercules canvas: the guest programs arbitrary 6845 rasters (custom sizes,
+    // rows that straddle the hsync edge, modes without vertical blanking), so the
+    // display side presents one fixed 720x350 window and pads the rest black,
+    // like a fixed-raster monitor. Each line the window runs 720 dots from the
+    // guest's active start (a row cannot straddle its own start); each frame it
+    // runs 350 lines opening CANVAS_VSKIP lines after the vsync fall (the one
+    // vertical event every mode generates). The scaler needs every DE line
+    // bit-identical, so vertical state only moves at the end of a line's dot
+    // run, never at a line start where a registered value would lag by a dot.
+    localparam CANVAS_W = 10'd720;
+    localparam CANVAS_H = 10'd350;
+    localparam CANVAS_VSKIP = 3'd4;  // lines from the vsync fall to the window top
+    wire hgc_shown_pix;
+    synch_3 s_hgc_shown_pix (pix_sel, hgc_shown_pix, clk_pix);
+    reg       src_hb_d = 1'b0;
+    reg       src_vs_d = 1'b0;
+    reg       v_arm    = 1'b0;   // vsync fell; window opens after the skip
+    reg [2:0] v_skip   = 3'd0;
+    reg [9:0] h_run    = 10'd0;  // dots left in this line's window
+    reg [9:0] v_run    = 10'd0;  // lines left in this frame's window
+    wire      line_open = src_hb_d & ~HBlank & (h_run == 10'd0);   // guest active start
+    always @(posedge clk_pix) begin
+        src_hb_d <= HBlank;
+        src_vs_d <= VSync;
+        if (~VSync & src_vs_d) begin
+            v_arm  <= 1'b1;
+            v_skip <= 3'd0;
+        end
+        if (line_open) begin
+            h_run <= CANVAS_W - 10'd1;   // this cycle is the window's first dot
+        end else if (h_run != 10'd0) begin
+            h_run <= h_run - 10'd1;
+            if (h_run == 10'd1) begin    // line end: settle v_run for the next line
+                if (v_arm) begin
+                    if (v_skip == CANVAS_VSKIP - 3'd1) begin
+                        v_run <= CANVAS_H;
+                        v_arm <= 1'b0;
+                    end else begin
+                        v_run  <= 10'd0;   // skip lines stay blank
+                        v_skip <= v_skip + 3'd1;
+                    end
+                end else if (v_run != 10'd0) begin
+                    v_run <= v_run - 10'd1;
+                end
+            end
+        end
+    end
+    wire canvas_hb = ~(line_open | (h_run != 10'd0));
+    wire canvas_vb = (v_run == 10'd0);
+
+    // Blanking presented to the scaler and overlays: the canvas on Hercules, the
+    // source raster on CGA (cga.v already normalizes every CGA mode to 640x200).
+    wire vid_hb  = hgc_shown_pix ? canvas_hb : HBlank;
+    wire vid_vb  = hgc_shown_pix ? canvas_vb : VBlank;
+    // Canvas padding: inside the window but outside the guest's active raster.
+    wire vid_pad = hgc_shown_pix & (HBlank | VBlank);
+
     wire        credits_hb, credits_vb;
     wire [23:0] credits_rgb;
     wire        credits_rst;
@@ -1903,9 +2041,9 @@ module core_top (
         .pxl_cen    ( 1'b1 ),
 
         // input image
-        .HB         ( HBlank  ),
-        .VB         ( VBlank ),
-        .rgb_in     ( {tr, tg, tb} ),   // live picture; the credits dim it behind the scrolling text
+        .HB         ( vid_hb  ),
+        .VB         ( vid_vb ),
+        .rgb_in     ( vid_pad ? 24'd0 : {tr, tg, tb} ),   // live picture; the credits dim it behind the scrolling text
         .rotate     ( 2'd0  ),
         .toggle     ( 1'b0  ),
         .fast_scroll( 1'b0  ),
@@ -1924,22 +2062,29 @@ module core_top (
         .rgb_out    ( credits_rgb )
     );
 
-    // OSD overlay raster counters, rebuilt from the CGA blanking edges (active
-    // geometry is mode-dependent, so anchor off blanking, not absolute pixels).
-    // osd_hcnt = pixel within the active line, osd_vcnt = active line in the frame.
+    // OSD overlay raster counters, rebuilt from the presented blanking edges (the
+    // Hercules canvas, or CGA's own blanking). osd_hcnt = pixel within the active
+    // line, osd_vcnt = active line in the frame.
     reg osd_hb_d = 1'b0;
     always @(posedge clk_pix) begin
-        osd_hb_d <= HBlank;
-        if (HBlank)                  osd_hcnt <= 10'd0;
+        osd_hb_d <= vid_hb;
+        if (vid_hb)                  osd_hcnt <= 10'd0;
         else                         osd_hcnt <= osd_hcnt + 10'd1;
-        if (VBlank)                  osd_vcnt <= 10'd0;
-        else if (osd_hb_d & ~HBlank) osd_vcnt <= osd_vcnt + 10'd1;
+        if (vid_vb)                  osd_vcnt <= 10'd0;
+        else if (osd_hb_d & ~vid_hb) osd_vcnt <= osd_vcnt + 10'd1;
     end
+
+    // Scaler slot (video.json): 0 = CGA 640x200, 1 = the Hercules canvas. The
+    // canvas absorbs every guest-programmed HGC geometry, so the slot follows
+    // only the displayed card.
+    wire [2:0] vid_slot = hgc_shown_pix ? 3'd1 : 3'd0;
 
     // Framebuffer palette index -> opaque colour; index 0 is transparent and
     // falls through to the picture.
     wire osd_enable;
     synch_3 s_osd_enable_pix (osd_active, osd_enable, clk_pix);
+    wire vid_blank_pix;
+    synch_3 s_vid_blank_pix (vid_blank, vid_blank_pix, clk_pix);
     wire osd_show = osd_enable & osd_in_area & (osd_palette_idx != 4'd0);
     reg [23:0] osd_color;
     always @(*) begin
@@ -1965,15 +2110,19 @@ module core_top (
     reg         vs_d    = 1'b0;
 
     // The credits overlay registers HB/VB/RGB by one clk_pix; stage HSync/VSync once
-    // (hs_d/vs_d) so sync stays aligned with the overlaid pixels.
+    // (hs_d/vs_d) so sync stays aligned with the overlaid pixels. Whenever DE is
+    // low the bus carries the end-of-line word naming the scaler slot ([23:13] =
+    // slot, function code [2:0] = 0), held through the whole blanking interval:
+    // an all-zero blanking bus is itself a slot-0 command and the last word in a
+    // frame wins. Its function bits are zero, so it is inert during VS.
+    wire vid_de_now = ~(credits_hb | credits_vb) & ~vid_blank_pix;
     always @(posedge clk_pix)
     begin
         hs_d    <= HSync;
         vs_d    <= VSync;
-        vid_de  <= ~(credits_hb | credits_vb);
-        vid_rgb <= (credits_hb | credits_vb) ? 24'd0
-                 : osd_show                  ? osd_color
-                 :                             credits_rgb;
+        vid_de  <= vid_de_now;
+        vid_rgb <= vid_de_now ? (osd_show ? osd_color : credits_rgb)
+                 :              {8'd0, vid_slot, 13'd0};
         vid_hs  <= hs_d;
         vid_vs  <= vs_d;
     end

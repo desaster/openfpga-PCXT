@@ -44,11 +44,12 @@
 #define VKB_CTRL     ((volatile uint32_t *) 0x20000004) // W: bit0 = OSD overlay shown
 #define VKB_KEY      ((volatile uint32_t *) 0x20000008) // W: bit8 = make, bits[7:0] Set-2 code
 #define SETTINGS_REG ((volatile uint32_t *) 0x2000000C) // W: {index[12:8], value[7:0]}
-#define OSD_ACTION   ((volatile uint32_t *) 0x20000010) // W: bit0 = reset PC, bit1 = show credits
+#define OSD_ACTION   ((volatile uint32_t *) 0x20000010) // W: bit0 reset, bit1 credits, bit2 video
 
 // OSD_ACTION command bits.
 #define OSD_ACT_RESET   1u
 #define OSD_ACT_CREDITS 2u
+#define OSD_ACT_VIDEO   4u
 
 // cont1_key button bits (Analogue Pocket layout).
 #define BTN_UP     (1 << 0)
@@ -76,6 +77,7 @@
 #define BTNFN_NONE     0u
 #define BTNFN_SETTINGS 1u
 #define BTNFN_CREDITS  2u
+#define BTNFN_VIDEO    3u
 
 // FDD_REQUEST bits
 #define FDD_REQ_READ  (1 << 0)

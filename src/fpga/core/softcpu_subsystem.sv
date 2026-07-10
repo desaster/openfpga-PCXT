@@ -78,6 +78,7 @@ module softcpu_subsystem (
     output        osd_active,
     output        osd_reset_req,
     output        osd_credits_req,
+    output        osd_video_req,
 
     // Virtual-keyboard key event: {make, Set-2 code}, with a strobe that toggles
     // per firmware write so pocket_keyboard pushes exactly one queue entry.
@@ -99,7 +100,8 @@ module softcpu_subsystem (
     output  [1:0] osd_joy1,
     output  [1:0] osd_joy2,
     output        osd_swapjoy,
-    output        osd_syncjoy
+    output        osd_syncjoy,
+    output        osd_video_1st
 );
 
     //
@@ -170,22 +172,27 @@ module softcpu_subsystem (
     end
     assign osd_active = osd_active_r;
 
-    // OSD action trigger at 0x20000010: bit0 requests a PC reset, bit1 the credits overlay. Reset
-    // resets the softcore too, so its request self-clears; core_top stretches reset into a clean
-    // pulse and edge-detects credits (the firmware clears the register when the panel reopens).
+    // OSD action trigger at 0x20000010: bit0 requests a PC reset, bit1 the credits overlay,
+    // bit2 toggles the displayed video card. Reset resets the softcore too, so its request
+    // self-clears; core_top stretches reset into a clean pulse and edge-detects the others
+    // (the firmware re-arms the register with a zero write before each request).
     reg osd_reset_req_r = 1'b0;
     reg osd_credits_req_r = 1'b0;
+    reg osd_video_req_r = 1'b0;
     always @(posedge clk_pico) begin
         if (reset) begin
             osd_reset_req_r   <= 1'b0;
             osd_credits_req_r <= 1'b0;
+            osd_video_req_r   <= 1'b0;
         end else if (sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[4:2] == 3'd4) begin
             osd_reset_req_r   <= cpu_mem_wdata[0];
             osd_credits_req_r <= cpu_mem_wdata[1];
+            osd_video_req_r   <= cpu_mem_wdata[2];
         end
     end
     assign osd_reset_req   = osd_reset_req_r;
     assign osd_credits_req = osd_credits_req_r;
+    assign osd_video_req   = osd_video_req_r;
 
     // Virtual-keyboard key event, written by the firmware at 0x20000008. The CPU
     // holds a store across two clk_pico cycles, so the write is edge-detected to
@@ -215,6 +222,9 @@ module softcpu_subsystem (
     // value[7:0]} into a small register file; the index order matches settings_ui.c's SET_* enum.
     // A plain value latch: the two-cycle PicoRV32 store just writes the same value twice, so no
     // strobe or edge-detect is needed. Only the settings wired to an output leave this module.
+    // The file deliberately survives machine resets (registers power up 0): reset-latched
+    // consumers like hgc_mode sample it at reset release, before the restarted firmware can
+    // re-push values.
     localparam SET_IDX_CPU_SPEED = 5'd0;
     localparam SET_IDX_BIOS_WR   = 5'd1;
     localparam SET_IDX_OPL2      = 5'd2;
@@ -229,15 +239,11 @@ module softcpu_subsystem (
     localparam SET_IDX_JOY2      = 5'd13;
     localparam SET_IDX_SWAPJOY   = 5'd14;
     localparam SET_IDX_SYNCJOY   = 5'd15;
+    localparam SET_IDX_VIDEO_1ST = 5'd16;
     reg [7:0] osd_settings [0:31];
     wire settings_wr = sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[3:2] == 2'd3;
-    integer si;
     always @(posedge clk_pico) begin
-        if (reset) begin
-            for (si = 0; si < 32; si = si + 1) begin
-                osd_settings[si] <= 8'd0;
-            end
-        end else if (settings_wr) begin
+        if (settings_wr) begin
             osd_settings[cpu_mem_wdata[12:8]] <= cpu_mem_wdata[7:0];
         end
     end
@@ -255,6 +261,7 @@ module softcpu_subsystem (
     assign osd_joy2      = osd_settings[SET_IDX_JOY2][1:0];
     assign osd_swapjoy   = osd_settings[SET_IDX_SWAPJOY][0];
     assign osd_syncjoy   = osd_settings[SET_IDX_SYNCJOY][0];
+    assign osd_video_1st = osd_settings[SET_IDX_VIDEO_1ST][0];
 
     //
     // Memory ready. The ROM read is registered, so it needs two clk_pico cycles;

@@ -162,8 +162,10 @@ module hgc(
     assign std_hsyncwidth = (hsync_width_crtc == STD_HSYNCWIDTH);
     assign vblank_border = vblank;
 
-    // Hsync only present when video is enabled
-    assign hsync = video_enabled & hsync_int;
+    // Hsync runs free of the video-enable bit, matching the CGA card: the pixel
+    // pipeline already blanks the content, and the display side needs sync to
+    // survive a guest's 3B8 blank.
+    assign hsync = hsync_int;
 
     // Update control register
     always @ (posedge clk)
@@ -206,6 +208,7 @@ module hgc(
 	 );
 	 
 //    if (HGC_70HZ) begin
+	 /*
         defparam crtc.H_TOTAL = 8'd99;
         defparam crtc.H_DISP = 8'd80;
         defparam crtc.H_SYNCPOS = 8'd82;
@@ -217,8 +220,8 @@ module hgc(
         defparam crtc.V_MAXSCAN = 5'd13;
         defparam crtc.C_START = 7'd11;
         defparam crtc.C_END = 5'd12;
+	 */
 //    end else begin
-	 /*
         defparam crtc.H_TOTAL = 8'd97;
         defparam crtc.H_DISP = 8'd80;
         defparam crtc.H_SYNCPOS = 8'd82;
@@ -230,6 +233,7 @@ module hgc(
         defparam crtc.V_MAXSCAN = 5'd13;
         defparam crtc.C_START = 7'd11;
         defparam crtc.C_END = 5'd12;
+	 /*
     //end
 
     // Interface to video SRAM chip

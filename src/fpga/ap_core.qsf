@@ -745,7 +745,7 @@ set_global_assignment -name VERILOG_MACRO "ENABLE_TANDY_VIDEO=0"
 set_global_assignment -name VERILOG_MACRO "ENABLE_TANDY_AUDIO=0"
 set_global_assignment -name VERILOG_MACRO "ENABLE_TANDY_KBD=0"
 set_global_assignment -name VERILOG_MACRO "ENABLE_CGA=1"
-set_global_assignment -name VERILOG_MACRO "ENABLE_HGC=0"
+set_global_assignment -name VERILOG_MACRO "ENABLE_HGC=1"
 set_global_assignment -name VERILOG_MACRO "ENABLE_OPL2=1"
 set_global_assignment -name VERILOG_MACRO "ENABLE_CMS=0"
 set_global_assignment -name VERILOG_MACRO "ENABLE_EMS=1"
@@ -776,9 +776,11 @@ set_global_assignment -name SYSTEMVERILOG_FILE core/softcpu_fdd_bridge.sv
 # core_constraints.sdc is pulled in by apf_constraints.sdc via read_sdc
 # (after derive_pll_clocks); do not add it as an SDC_FILE here too.
 
-# Core clocking: system PLL (50/100 MHz + SDRAM clock) and video PLL (CGA pixel).
+# Core clocking: system PLL (50/100 MHz + SDRAM clock) and the two video PLLs
+# (CGA and Hercules pixel domains).
 set_global_assignment -name VERILOG_FILE core/pll.v
 set_global_assignment -name VERILOG_FILE core/pll_video.v
+set_global_assignment -name VERILOG_FILE core/pll_video_hgc.v
 
 # Shared PCXT RTL, relocated under core/ from the MiSTer core. The MiSTer-only
 # sources were dropped from the tree: its Quartus file list, PLLs, and HPS glue.

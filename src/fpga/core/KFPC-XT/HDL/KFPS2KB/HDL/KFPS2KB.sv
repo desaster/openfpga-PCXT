@@ -6,8 +6,9 @@
 //
 // Local modification (PCXT Pocket port, 2026-07-07): the F11 (0x78) / F12 (0x07) key
 // intercepts that toggled swap_video / pause_core are removed, so both keys pass through
-// as normal keycodes; this port does not repurpose them. swap_video / pause_core stay at
-// their reset values (unused here).
+// as normal keycodes; this port does not repurpose them. pause_core stays at its reset
+// value (unused here); swap_video follows the video_output input, so the top level owns
+// the displayed-card select.
 //
 module KFPS2KB (
     input   logic           clock,
@@ -216,11 +217,18 @@ module KFPS2KB (
     endfunction
 
     //
+    // Displayed-card select: follows the top's video_output input (the F11 toggle
+    // upstream kept here is removed; see the header note).
+    //
+    always_ff @(posedge clock) begin
+        swap_video <= tandy_video ? 1'b0 : video_output;
+    end
+
+    //
     // Make keycode
     //
     always_ff @(posedge clock, posedge reset) begin
         if (reset) begin
-            swap_video  <= tandy_video ? 1'b0 : video_output;
             irq         <= 1'b0;
             keycode     <= 8'h00;
             break_flag  <= 1'b0;
