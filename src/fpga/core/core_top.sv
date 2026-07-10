@@ -352,6 +352,7 @@ module core_top (
     wire [4:0]  joy_opts = {syncjoy_cfg, joy2_cfg, joy1_cfg};
 
     wire composite_cfg;   // CGA composite colour decode (settings bank, 0x7C)
+    wire cga_gfx_cfg, hgc_gfx_cfg;   // CGA/Hercules Graphics I/O enables (settings bank; 0 = Yes)
     wire composite = composite_cfg | xtctl[0];
     wire [1:0] scale = status[2:1];
     wire [2:0] screen_mode = status[16:14];
@@ -380,8 +381,8 @@ module core_top (
         scale_video_ff          <= scale;
         screen_mode_video_ff    <= screen_mode;
         border_video_ff         <= border;
-        cga_hw                  <= `ENABLE_CGA ? (~status[44] | tandy_video_mode) : 1'b0;
-        hercules_hw             <= `ENABLE_HGC ? (`ENABLE_CGA ? ~status[45] : 1'b1) : 1'b0;
+        cga_hw                  <= `ENABLE_CGA ? (~cga_gfx_cfg | tandy_video_mode) : 1'b0;
+        hercules_hw             <= `ENABLE_HGC ? (`ENABLE_CGA ? ~hgc_gfx_cfg : 1'b1) : 1'b0;
     end
 
     always @(posedge clk_chipset)
@@ -498,9 +499,10 @@ module core_top (
 
     // The video back-end (palette tint -> credits -> OSD -> output regs and the
     // scaler's video_rgb_clock) runs on whichever pixel pair matches the displayed
-    // card; the two card domains themselves never switch. swap_video (KFPS2KB's
-    // F11 toggle) drives this sequencer: blank the output, flip both clock muxes
-    // mid-window, un-blank once the scaler has seen frames of the new timing.
+    // card; the two card domains themselves never switch. swap_video (the keyboard
+    // module's follower of the displayed-card select) drives this sequencer: blank
+    // the output, flip both clock muxes mid-window, un-blank once the scaler has
+    // seen frames of the new timing.
     wire swap_video_chip;
     synch_3 s_swap_video (swap_video, swap_video_chip, clk_chipset);
     reg         pix_sel   = 1'b0;   // 0 = CGA pixel pair, 1 = HGC pixel pair
@@ -636,6 +638,8 @@ module core_top (
     synch_3              s_swapjoy_cfg    (osd_swapjoy,       swapjoy_cfg,   clk_chipset);
     synch_3              s_syncjoy_cfg    (osd_syncjoy,       syncjoy_cfg,   clk_chipset);
     synch_3              s_video_1st_cfg  (osd_video_1st,     video_1st_cfg, clk_chipset);
+    synch_3              s_cga_gfx_cfg    (osd_cga_gfx,       cga_gfx_cfg,   clk_chipset);
+    synch_3              s_hgc_gfx_cfg    (osd_hgc_gfx,       hgc_gfx_cfg,   clk_chipset);
     synch_3 #(.WIDTH(8)) s_key_a          (key_a_74a,         key_a,         clk_chipset);
     synch_3 #(.WIDTH(8)) s_key_b          (key_b_74a,         key_b,         clk_chipset);
     synch_3 #(.WIDTH(8)) s_key_x          (key_x_74a,         key_x,         clk_chipset);
@@ -874,6 +878,14 @@ module core_top (
     wire       osd_swapjoy;
     wire       osd_syncjoy;
     wire       osd_video_1st;
+    wire       osd_cga_gfx;
+    wire       osd_hgc_gfx;
+
+    // High from power-on until the softcore's first reset request; lets the firmware
+    // re-apply reset-latched settings once, after the saved values are pushed.
+    reg cold_boot = 1'b1;
+    always @(posedge clk_chipset)
+        if (osd_reset_req) cold_boot <= 1'b0;
 
     softcpu_subsystem u_softcpu (
         .clk_sys                    (clk_chipset),
@@ -923,6 +935,7 @@ module core_top (
         .osd_open_req               (osd_open_req),
         .raster_w                   (osd_raster_w),
         .raster_h                   (osd_raster_h),
+        .cold_boot                  (cold_boot),
         .osd_active                 (osd_active),
         .osd_reset_req              (osd_reset_req),
         .osd_credits_req            (osd_credits_req),
@@ -943,7 +956,9 @@ module core_top (
         .osd_joy2                   (osd_joy2),
         .osd_swapjoy                (osd_swapjoy),
         .osd_syncjoy                (osd_syncjoy),
-        .osd_video_1st              (osd_video_1st)
+        .osd_video_1st              (osd_video_1st),
+        .osd_cga_gfx                (osd_cga_gfx),
+        .osd_hgc_gfx                (osd_hgc_gfx)
     );
 
     // ---- ROM-load download tracking ----
@@ -1936,7 +1951,8 @@ module core_top (
     ///////////////////////   VIDEO   ///////////////////////
     //
     // Lean CGA/HGC -> Pocket scaler: the Pocket scaler does the scaling and filtering.
-    // DE/porches follow CHIPSET's blanking as-is.
+    // DE/porches follow CHIPSET's CGA blanking as-is; the Hercules raster is reshaped
+    // into the fixed canvas below.
     //
     // r/g/b/HSync/VSync/HBlank/VBlank leave CHIPSET on the displayed card's dot-clock
     // domain (clk_28_636 CGA, clk_32_514 HGC). clk_pix is the matching half-rate

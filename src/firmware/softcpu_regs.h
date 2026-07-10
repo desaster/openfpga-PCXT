@@ -67,12 +67,14 @@
 #define BTN_SELECT (1 << 14)
 #define BTN_START  (1 << 15)
 
-// CONT1_KEY carries the Select/Start function config and two overlay flags in its upper bits
-// (the low 16 are the buttons): select_fn[19:16], start_fn[23:20], credits[24], osd_open[25].
+// CONT1_KEY carries the Select/Start function config and status flags in its upper bits (the
+// low 16 are the buttons): select_fn[19:16], start_fn[23:20], credits[24], osd_open[25],
+// coldboot[26].
 #define CONT1_SEL_FN(raw)   (((raw) >> 16) & 0xFu)
 #define CONT1_START_FN(raw) (((raw) >> 20) & 0xFu)
 #define CONT1_CREDITS(raw)  ((raw) & (1u << 24))
 #define CONT1_OSD_OPEN(raw) ((raw) & (1u << 25)) // interact "Extra Options" requests the OSD
+#define CONT1_COLDBOOT(raw) ((raw) & (1u << 26)) // no reset requested since power-on
 
 // OSD_RASTER field extractors.
 #define RASTER_W(raw) ((raw) & 0x3FFu)

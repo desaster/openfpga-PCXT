@@ -55,6 +55,8 @@ enum {
     SET_SWAPJOY,
     SET_SYNCJOY,
     SET_VIDEO_1ST,
+    SET_CGA_GFX,
+    SET_HGC_GFX,
     SET_COUNT
 };
 
@@ -71,6 +73,7 @@ static const char *const opt_display[] = { "Full Color", "Green", "Amber", "B&W"
 static const char *const opt_ems_frame[] = { "C000", "D000", "E000" };
 static const char *const opt_joy[] = { "Analog", "Digital", "Disabled" };
 static const char *const opt_no_yes[] = { "No", "Yes" };
+static const char *const opt_yes_no[] = { "Yes", "No" };
 static const char *const opt_video_1st[] = { "CGA", "Hercules" };
 
 typedef struct {
@@ -102,6 +105,8 @@ static setting_t settings[SET_COUNT] = {
     SETTING(opt_no_yes),           // SET_SWAPJOY
     SETTING(opt_no_yes),           // SET_SYNCJOY
     SETTING(opt_video_1st),        // SET_VIDEO_1ST (applied by the BIOS at the next Reset PC)
+    SETTING(opt_yes_no),           // SET_CGA_GFX (Yes = the card's I/O decode responds)
+    SETTING(opt_yes_no),           // SET_HGC_GFX
 };
 
 // Compiled defaults, snapshotted at boot before the save is adopted, for Reset to Defaults.
@@ -131,6 +136,8 @@ static const item_t items_main[] = {
 
 static const item_t items_system[] = {
     { "CPU Speed", IT_OPTION, SET_CPU_SPEED },
+    { "CGA Graphics", IT_OPTION, SET_CGA_GFX },
+    { "Hercules Graphics", IT_OPTION, SET_HGC_GFX },
     { "1st Video", IT_OPTION, SET_VIDEO_1ST },
     { "BIOS Writable", IT_OPTION, SET_BIOS_WR },
 };
@@ -366,6 +373,11 @@ void settings_load(void)
     for (uint32_t i = 0; i < SET_COUNT; i++) {
         *SETTINGS_REG = (i << 8) | settings[i].value;
     }
+}
+
+int settings_video_1st(void)
+{
+    return settings[SET_VIDEO_1ST].value;
 }
 
 void settings_service(void)

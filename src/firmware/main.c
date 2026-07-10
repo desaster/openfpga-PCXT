@@ -35,6 +35,13 @@ int main(void)
     vkb_ui_init();
     settings_load(); // adopt persisted settings before the timer IRQ can draw the OSD
 
+    // The cold POST runs before the saved settings are pushed, so a reset-latched
+    // 1st Video needs one more machine reset to take effect. The request clears the
+    // cold-boot flag, making this a per-power-on one-shot.
+    if (CONT1_COLDBOOT(*CONT1_KEY) && settings_video_1st()) {
+        *OSD_ACTION = OSD_ACT_RESET;
+    }
+
     // Arm the timer and enable only its interrupt (bit 0); the fault interrupts stay
     // masked so an illegal instruction still traps rather than looping in irq().
     timer_start(TIMER_PERIOD);

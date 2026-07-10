@@ -77,6 +77,7 @@ module softcpu_subsystem (
     input         osd_open_req,   // interact "Extra Options" requests the settings OSD
     input   [9:0] raster_w,       // presented raster size, for overlay placement
     input   [9:0] raster_h,
+    input         cold_boot,      // no reset requested since power-on
     output        osd_active,
     output        osd_reset_req,
     output        osd_credits_req,
@@ -103,7 +104,9 @@ module softcpu_subsystem (
     output  [1:0] osd_joy2,
     output        osd_swapjoy,
     output        osd_syncjoy,
-    output        osd_video_1st
+    output        osd_video_1st,
+    output        osd_cga_gfx,
+    output        osd_hgc_gfx
 );
 
     //
@@ -256,6 +259,8 @@ module softcpu_subsystem (
     localparam SET_IDX_SWAPJOY   = 5'd14;
     localparam SET_IDX_SYNCJOY   = 5'd15;
     localparam SET_IDX_VIDEO_1ST = 5'd16;
+    localparam SET_IDX_CGA_GFX   = 5'd17;
+    localparam SET_IDX_HGC_GFX   = 5'd18;
     reg [7:0] osd_settings [0:31];
     wire settings_wr = sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[4:2] == 3'd3;
     always @(posedge clk_pico) begin
@@ -278,6 +283,8 @@ module softcpu_subsystem (
     assign osd_swapjoy   = osd_settings[SET_IDX_SWAPJOY][0];
     assign osd_syncjoy   = osd_settings[SET_IDX_SYNCJOY][0];
     assign osd_video_1st = osd_settings[SET_IDX_VIDEO_1ST][0];
+    assign osd_cga_gfx   = osd_settings[SET_IDX_CGA_GFX][0];
+    assign osd_hgc_gfx   = osd_settings[SET_IDX_HGC_GFX][0];
 
     //
     // Memory ready. The ROM read is registered, so it needs two clk_pico cycles;
@@ -706,7 +713,7 @@ module softcpu_subsystem (
         casez (cpu_mem_addr)
             32'h0???_????: cpu_mem_rdata = rom_rdata;
             32'h1???_????: cpu_mem_rdata = ram_rdata;
-            32'h2000_0000: cpu_mem_rdata = {6'd0, osd_open_req, credits_active, start_fn, select_fn, cont1_key};
+            32'h2000_0000: cpu_mem_rdata = {5'd0, cold_boot, osd_open_req, credits_active, start_fn, select_fn, cont1_key};
             32'h2000_0018: cpu_mem_rdata = {6'd0, raster_h, 6'd0, raster_w};
             32'h3???_????: cpu_mem_rdata = fdd_rdata;
             32'h4???_????: cpu_mem_rdata = gpu_status;
