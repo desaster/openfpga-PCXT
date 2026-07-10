@@ -75,6 +75,8 @@ module softcpu_subsystem (
     input   [3:0] start_fn,
     input         credits_active, // credits overlay up: firmware suppresses OSD button input
     input         osd_open_req,   // interact "Extra Options" requests the settings OSD
+    input   [9:0] raster_w,       // presented raster size, for overlay placement
+    input   [9:0] raster_h,
     output        osd_active,
     output        osd_reset_req,
     output        osd_credits_req,
@@ -161,13 +163,12 @@ module softcpu_subsystem (
     wire sel_fdd    = cpu_mem_valid && (cpu_mem_addr[31:28] == 4'h3);
     wire sel_fb     = cpu_mem_valid && (cpu_mem_addr[31:28] == 4'h4);
 
-    // OSD control at 0x20000004: bit0 = overlay shown. An overlay is positioned by where the
-    // firmware draws it in the full-screen framebuffer, so there is no compositor offset.
+    // OSD control at 0x20000004: bit0 = overlay shown.
     reg osd_active_r = 1'b0;
     always @(posedge clk_pico) begin
         if (reset)
             osd_active_r <= 1'b0;
-        else if (sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[3:2] == 2'd1)
+        else if (sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[4:2] == 3'd1)
             osd_active_r <= cpu_mem_wdata[0];
     end
     assign osd_active = osd_active_r;
@@ -194,11 +195,26 @@ module softcpu_subsystem (
     assign osd_credits_req = osd_credits_req_r;
     assign osd_video_req   = osd_video_req_r;
 
+    // Compositor origin at 0x20000014: {y[25:16], x[9:0]}, the raster position of
+    // the framebuffer's top-left; the firmware derives it from the presented
+    // raster size (read back at 0x20000018).
+    reg [9:0] osd_org_x = 10'd0;
+    reg [9:0] osd_org_y = 10'd0;
+    always @(posedge clk_pico) begin
+        if (reset) begin
+            osd_org_x <= 10'd0;
+            osd_org_y <= 10'd0;
+        end else if (sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[4:2] == 3'd5) begin
+            osd_org_x <= cpu_mem_wdata[9:0];
+            osd_org_y <= cpu_mem_wdata[25:16];
+        end
+    end
+
     // Virtual-keyboard key event, written by the firmware at 0x20000008. The CPU
     // holds a store across two clk_pico cycles, so the write is edge-detected to
     // toggle the strobe exactly once; pocket_keyboard reads the strobe directly
     // (clk_pico is a gated clk_sys) and turns each toggle into one queue push.
-    wire      vkb_wr = sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[3:2] == 2'd2;
+    wire      vkb_wr = sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[4:2] == 3'd2;
     reg       vkb_wr_d  = 1'b0;
     reg [8:0] vkb_key_r = 9'd0;
     reg       vkb_stb_r = 1'b0;
@@ -241,7 +257,7 @@ module softcpu_subsystem (
     localparam SET_IDX_SYNCJOY   = 5'd15;
     localparam SET_IDX_VIDEO_1ST = 5'd16;
     reg [7:0] osd_settings [0:31];
-    wire settings_wr = sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[3:2] == 2'd3;
+    wire settings_wr = sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[4:2] == 3'd3;
     always @(posedge clk_pico) begin
         if (settings_wr) begin
             osd_settings[cpu_mem_wdata[12:8]] <= cpu_mem_wdata[7:0];
@@ -595,16 +611,25 @@ module softcpu_subsystem (
         end
     end
 
-    // Display area: the full 640x200 active raster, drawn 1:1. Overlays position themselves by
-    // where the firmware draws them, so the readout starts at the top-left of the raster.
+    // Display area: the 640x200 framebuffer drawn 1:1 with its top-left at the compositor
+    // origin. The origin is quasi-static, so it crosses into clk_pix through two plain
+    // register stages; a word torn mid-change costs at most one frame of a misplaced overlay.
     localparam [9:0] OSD_W = 10'd640;
     localparam [9:0] OSD_H = 10'd200;
 
-    wire osd_in_bounds = (osd_hcnt < OSD_W) && (osd_vcnt < OSD_H);
+    reg [19:0] osd_org_pix_s = 20'd0;
+    reg [19:0] osd_org_pix   = 20'd0;
+    always @(posedge clk_pix) begin
+        osd_org_pix_s <= {osd_org_y, osd_org_x};
+        osd_org_pix   <= osd_org_pix_s;
+    end
 
     // Stride 320 bytes/row, so the row offset is a constant multiply.
-    wire  [9:0] osd_x = osd_hcnt;                                           // 0..639
-    wire  [9:0] osd_y = osd_vcnt;                                           // 0..199
+    wire  [9:0] osd_x = osd_hcnt - osd_org_pix[9:0];                        // 0..639
+    wire  [9:0] osd_y = osd_vcnt - osd_org_pix[19:10];                      // 0..199
+
+    wire osd_in_bounds = (osd_hcnt >= osd_org_pix[9:0])  && (osd_x < OSD_W) &&
+                         (osd_vcnt >= osd_org_pix[19:10]) && (osd_y < OSD_H);
     wire [15:0] osd_byte_addr = osd_y[7:0] * 16'd320 + {7'd0, osd_x[9:1]};  // y*320 + x/2
     wire [13:0] osd_word_addr = osd_byte_addr[15:2];
 
@@ -682,6 +707,7 @@ module softcpu_subsystem (
             32'h0???_????: cpu_mem_rdata = rom_rdata;
             32'h1???_????: cpu_mem_rdata = ram_rdata;
             32'h2000_0000: cpu_mem_rdata = {6'd0, osd_open_req, credits_active, start_fn, select_fn, cont1_key};
+            32'h2000_0018: cpu_mem_rdata = {6'd0, raster_h, 6'd0, raster_w};
             32'h3???_????: cpu_mem_rdata = fdd_rdata;
             32'h4???_????: cpu_mem_rdata = gpu_status;
             default:       cpu_mem_rdata = 32'd0;

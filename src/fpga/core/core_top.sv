@@ -848,6 +848,9 @@ module core_top (
     // index + in-area flag, composited into the picture there.
     reg  [9:0] osd_hcnt = 10'd0;
     reg  [9:0] osd_vcnt = 10'd0;
+    wire [9:0] osd_vcnt_sel;         // line index of the presented raster (assigned at the canvas)
+    wire [9:0] osd_raster_w;         // presented raster size (assigned at the canvas)
+    wire [9:0] osd_raster_h;
     wire [3:0] osd_palette_idx;
     wire       osd_in_area;
     wire       osd_active;
@@ -909,7 +912,7 @@ module core_top (
 
         .clk_pix                    (clk_pix),
         .osd_hcnt                   (osd_hcnt),
-        .osd_vcnt                   (osd_vcnt),
+        .osd_vcnt                   (osd_vcnt_sel),
         .osd_palette_idx            (osd_palette_idx),
         .osd_in_area                (osd_in_area),
 
@@ -918,6 +921,8 @@ module core_top (
         .start_fn                   (start_fn),
         .credits_active             (credits_mode_chip),
         .osd_open_req               (osd_open_req),
+        .raster_w                   (osd_raster_w),
+        .raster_h                   (osd_raster_h),
         .osd_active                 (osd_active),
         .osd_reset_req              (osd_reset_req),
         .osd_credits_req            (osd_credits_req),
@@ -1978,15 +1983,20 @@ module core_top (
     // vertical event every mode generates). The scaler needs every DE line
     // bit-identical, so vertical state only moves at the end of a line's dot
     // run, never at a line start where a registered value would lag by a dot.
+    //
+    // CANVAS_VSKIP must equal the scaler's measured frame anchor: it places DE
+    // lines by a vsync-anchored line counter, not by arrival, so a window that
+    // opens early shows its first lines wrapped to the frame bottom. A wrapped
+    // strip along the bottom edge means this constant is off by its height.
     localparam CANVAS_W = 10'd720;
     localparam CANVAS_H = 10'd350;
-    localparam CANVAS_VSKIP = 3'd4;  // lines from the vsync fall to the window top
+    localparam CANVAS_VSKIP = 5'd16; // lines from the vsync fall to the window top
     wire hgc_shown_pix;
     synch_3 s_hgc_shown_pix (pix_sel, hgc_shown_pix, clk_pix);
     reg       src_hb_d = 1'b0;
     reg       src_vs_d = 1'b0;
     reg       v_arm    = 1'b0;   // vsync fell; window opens after the skip
-    reg [2:0] v_skip   = 3'd0;
+    reg [4:0] v_skip   = 5'd0;
     reg [9:0] h_run    = 10'd0;  // dots left in this line's window
     reg [9:0] v_run    = 10'd0;  // lines left in this frame's window
     wire      line_open = src_hb_d & ~HBlank & (h_run == 10'd0);   // guest active start
@@ -1995,7 +2005,7 @@ module core_top (
         src_vs_d <= VSync;
         if (~VSync & src_vs_d) begin
             v_arm  <= 1'b1;
-            v_skip <= 3'd0;
+            v_skip <= 5'd0;
         end
         if (line_open) begin
             h_run <= CANVAS_W - 10'd1;   // this cycle is the window's first dot
@@ -2003,12 +2013,12 @@ module core_top (
             h_run <= h_run - 10'd1;
             if (h_run == 10'd1) begin    // line end: settle v_run for the next line
                 if (v_arm) begin
-                    if (v_skip == CANVAS_VSKIP - 3'd1) begin
+                    if (v_skip == CANVAS_VSKIP - 5'd1) begin
                         v_run <= CANVAS_H;
                         v_arm <= 1'b0;
                     end else begin
                         v_run  <= 10'd0;   // skip lines stay blank
-                        v_skip <= v_skip + 3'd1;
+                        v_skip <= v_skip + 5'd1;
                     end
                 end else if (v_run != 10'd0) begin
                     v_run <= v_run - 10'd1;
@@ -2024,7 +2034,10 @@ module core_top (
     wire vid_hb  = hgc_shown_pix ? canvas_hb : HBlank;
     wire vid_vb  = hgc_shown_pix ? canvas_vb : VBlank;
     // Canvas padding: inside the window but outside the guest's active raster.
-    wire vid_pad = hgc_shown_pix & (HBlank | VBlank);
+    // The window's first line (v_run still at its load value) is sacrificial
+    // and forced black: the scaler captures the frame's first DE line
+    // unreliably, so no content may depend on it.
+    wire vid_pad = hgc_shown_pix & (HBlank | VBlank | (v_run == CANVAS_H));
 
     wire        credits_hb, credits_vb;
     wire [23:0] credits_rgb;
@@ -2062,17 +2075,24 @@ module core_top (
         .rgb_out    ( credits_rgb )
     );
 
-    // OSD overlay raster counters, rebuilt from the presented blanking edges (the
-    // Hercules canvas, or CGA's own blanking). osd_hcnt = pixel within the active
-    // line, osd_vcnt = active line in the frame.
+    // OSD overlay raster counters: osd_hcnt = pixel within the active line; the
+    // line index is the canvas countdown when the canvas is shown (offset past
+    // the sacrificial first line), else an hblank-fall counter parked at -1 so
+    // the first fall, which lands after VBlank ends, counts line 0.
     reg osd_hb_d = 1'b0;
     always @(posedge clk_pix) begin
         osd_hb_d <= vid_hb;
         if (vid_hb)                  osd_hcnt <= 10'd0;
         else                         osd_hcnt <= osd_hcnt + 10'd1;
-        if (vid_vb)                  osd_vcnt <= 10'd0;
+        if (vid_vb)                  osd_vcnt <= 10'd1023;
         else if (osd_hb_d & ~vid_hb) osd_vcnt <= osd_vcnt + 10'd1;
     end
+    assign osd_vcnt_sel = hgc_shown_pix ? (CANVAS_H - 10'd1 - v_run) : osd_vcnt;
+
+    // Presented raster size, read by the softcore to place the overlay window;
+    // the canvas reports its 349 usable lines, excluding the sacrificial one.
+    assign osd_raster_w = pix_sel ? CANVAS_W : 10'd640;
+    assign osd_raster_h = pix_sel ? (CANVAS_H - 10'd1) : 10'd200;
 
     // Scaler slot (video.json): 0 = CGA 640x200, 1 = the Hercules canvas. The
     // canvas absorbs every guest-programmed HGC geometry, so the slot follows

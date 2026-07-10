@@ -11,11 +11,9 @@
 #define MOVE_COOLDOWN (CLK_FREQ / 25) // debounce between moves
 #define BTN_DPAD      (BTN_UP | BTN_DOWN | BTN_LEFT | BTN_RIGHT)
 
-// The 636x81 keyboard sits near the bottom (or top) of the 640x200 framebuffer; the position
-// toggle just redraws it at the other origin.
-#define VKB_X        2
-#define VKB_Y_TOP    5
-#define VKB_Y_BOTTOM 111
+// The 636x81 keyboard sits flush against the bottom (or top) edge of the 640x200
+// framebuffer; the position toggle just redraws it at the other origin.
+#define VKB_X 2
 
 // KFPS2KB accepts one Set-2 byte per ~0.88 ms (1136/s); a break is two bytes. Emitting
 // a burst of breaks (clearing many latches at once) faster than that overflows
@@ -39,6 +37,7 @@ static uint8_t ui_mode;           // OSD_NONE / OSD_VKB / OSD_SETTINGS
 static uint8_t credits_shown;     // credits overlay up (latches core_top's flag across the dismiss)
 static uint8_t osd_open_prev;     // previous interact "Extra Options" request, for edge detection
 static uint8_t ui_osd_top;        // VKB at the top of the screen instead of the bottom
+static uint32_t ui_raster;        // presented raster size, {h[25:16], w[9:0]}
 static int cur_key;               // selected key index
 static int cur_vrow;              // selected visual row
 static int held_key;              // key momentarily held by button A, -1 = none
@@ -54,9 +53,27 @@ static void vkb_emit(int make, uint8_t scancode)
     *VKB_KEY = ((uint32_t) (make ? 1 : 0) << 8) | scancode;
 }
 
-// OSD control word: bit0 = an overlay is shown. Position is set by where the overlay is drawn.
+// Compositor origin: where the framebuffer's top-left lands on the presented raster
+// (assumed at least framebuffer-sized). Centred, except the keyboard's edge-hugging
+// layout stays aligned to the raster's top or bottom edge.
+static void osd_origin_write(void)
+{
+    uint32_t w = RASTER_W(ui_raster);
+    uint32_t h = RASTER_H(ui_raster);
+    uint32_t x = (w - OSD_FB_WIDTH) / 2;
+    uint32_t y;
+    if (ui_mode == OSD_VKB) {
+        y = ui_osd_top ? 0 : (h - OSD_FB_HEIGHT);
+    } else {
+        y = (h - OSD_FB_HEIGHT) / 2;
+    }
+    *OSD_ORIGIN = (y << 16) | x;
+}
+
+// OSD control word: bit0 = an overlay is shown; the origin is refreshed first.
 static void osd_ctrl_write(void)
 {
+    osd_origin_write();
     *VKB_CTRL = (ui_mode != OSD_NONE) ? 1u : 0u;
 }
 
@@ -156,7 +173,8 @@ void vkb_ui_init(void)
     cur_vrow = 0;
     held_key = -1;
     ui_osd_top = 0;
-    osd.y0 = ui_osd_top ? VKB_Y_TOP : VKB_Y_BOTTOM;
+    ui_raster = *OSD_RASTER;
+    osd.y0 = ui_osd_top ? 0 : (OSD_FB_HEIGHT - osd.height);
     latch_bits[0] = latch_bits[1] = latch_bits[2] = 0;
     ui_mode = OSD_NONE; // nothing is shown until an overlay is opened
 }
@@ -236,6 +254,13 @@ void vkb_ui_tick(void)
     uint32_t raw = *CONT1_KEY;
     uint16_t buttons = raw & 0xFFFF;
 
+    // A raster-size change (the displayed card switched) re-bases any overlay on screen.
+    uint32_t raster = *OSD_RASTER;
+    if (raster != ui_raster) {
+        ui_raster = raster;
+        osd_origin_write();
+    }
+
     // While the credits overlay is up, any button dismisses it (core_top does that); swallow input
     // here so the dismissing press doesn't also run a button function or re-trigger credits.
     // credits_shown latches the flag so the press is caught even as core_top clears it the same
@@ -303,7 +328,8 @@ void vkb_ui_tick(void)
         }
         if (pressed & BTN_R1) { // swap the OSD between bottom and top, redrawing at the new spot
             ui_osd_top = !ui_osd_top;
-            osd.y0 = ui_osd_top ? VKB_Y_TOP : VKB_Y_BOTTOM;
+            osd.y0 = ui_osd_top ? 0 : (OSD_FB_HEIGHT - osd.height);
+            osd_origin_write();
             vkb_draw_keyboard(&osd, cur_key);
         }
         // D-pad: a fresh press moves once; holding past REPEAT_DELAY repeats at

@@ -45,6 +45,8 @@
 #define VKB_KEY      ((volatile uint32_t *) 0x20000008) // W: bit8 = make, bits[7:0] Set-2 code
 #define SETTINGS_REG ((volatile uint32_t *) 0x2000000C) // W: {index[12:8], value[7:0]}
 #define OSD_ACTION   ((volatile uint32_t *) 0x20000010) // W: bit0 reset, bit1 credits, bit2 video
+#define OSD_ORIGIN   ((volatile uint32_t *) 0x20000014) // W: {y[25:16], x[9:0]} framebuffer origin
+#define OSD_RASTER   ((volatile uint32_t *) 0x20000018) // R: {h[25:16], w[9:0]} presented raster size
 
 // OSD_ACTION command bits.
 #define OSD_ACT_RESET   1u
@@ -71,6 +73,10 @@
 #define CONT1_START_FN(raw) (((raw) >> 20) & 0xFu)
 #define CONT1_CREDITS(raw)  ((raw) & (1u << 24))
 #define CONT1_OSD_OPEN(raw) ((raw) & (1u << 25)) // interact "Extra Options" requests the OSD
+
+// OSD_RASTER field extractors.
+#define RASTER_W(raw) ((raw) & 0x3FFu)
+#define RASTER_H(raw) (((raw) >> 16) & 0x3FFu)
 
 // Button function ids the softcore routes (derived in core_top from the Select/Start config;
 // key options are handled by pocket_keyboard, not here).
