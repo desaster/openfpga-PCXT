@@ -708,19 +708,33 @@ module core_top (
     wire        target_dataslot_done;
     wire  [2:0] target_dataslot_err;
 
-    // Data table (dataslot ID/size). APF loads each slot's size here and reads it back at the
-    // nonvolatile flush; a slot whose size reads 0 is treated as unused and never flushed. The
-    // Settings save does not exist on first boot, so its loaded size is 0 - declare it here.
-    // Written continuously, since APF also writes this table at load. Indexed by slot INDEX
-    // (position in data.json), two words per slot (id, size); the Settings slot is index 5, so its
-    // size word is at 5*2+1 = 11, and the file is 64 bytes.
-    reg  [9:0]  datatable_addr = 10'd11;
-    reg         datatable_wren = 1'b0;
-    reg  [31:0] datatable_data = 32'd64;
+    // Data table (dataslot ID/size), two words per slot index, also written by APF at
+    // load. Rotate: redeclare the Settings size (word 11; absent on first boot, and a
+    // 0-size slot never flushes) and scan the hard-disk sizes (words 7/9; a persisted
+    // image appears only here, never as a dataslot update). Reads land two cycles
+    // after the address.
+    reg  [2:0]  datatable_phase = 3'd0;
+    reg  [9:0]  datatable_addr  = 10'd11;
+    reg         datatable_wren  = 1'b0;
+    reg  [31:0] datatable_data  = 32'd64;
+    wire [31:0] datatable_q;
+    reg  [31:0] hdd0_slot_bytes_74a = 32'd0;
+    reg  [31:0] hdd1_slot_bytes_74a = 32'd0;
     always @(posedge clk_74a) begin
-        datatable_wren <= 1'b1;
-        datatable_addr <= 10'd11;
-        datatable_data <= 32'd64;
+        datatable_phase <= datatable_phase + 3'd1;
+        datatable_wren  <= 1'b0;
+        case (datatable_phase)
+            3'd0: datatable_addr <= 10'd7;      // IDE 0-0 size word (index 3*2+1)
+            3'd3: begin
+                hdd0_slot_bytes_74a <= datatable_q;
+                datatable_addr      <= 10'd9;   // IDE 0-1 size word (index 4*2+1)
+            end
+            3'd6: begin
+                hdd1_slot_bytes_74a <= datatable_q;
+                datatable_addr      <= 10'd11;  // Settings size word (index 5*2+1)
+                datatable_wren      <= 1'b1;
+            end
+        endcase
     end
 
     core_bridge_cmd icb (
@@ -792,30 +806,25 @@ module core_top (
         .datatable_addr            (datatable_addr),
         .datatable_wren            (datatable_wren),
         .datatable_data            (datatable_data),
-        .datatable_q               ()
+        .datatable_q               (datatable_q)
     );
 
     // ---- Disk softcore ----
     // Services CHIPSET's floppy.v: pulls sectors from a drive's dataslot with
     // core_bridge_cmd's target_dataslot handshake and streams them over the
-    // management bus. The image size is reported once as a dataslot update (bytes);
-    // convert to sectors on the chipset clock and hand it to the firmware.
+    // management bus. A floppy image's size is reported once as a dataslot update
+    // (bytes); the hard-disk sizes come from the data table scan above. Convert to
+    // sectors on the chipset clock and hand them to the firmware.
     // Floppy images are dataslot id 2 (drive 0) and id 3 (drive 1); the hard disks are
     // id 4 (master) and id 5 (slave); id 1 is the BIOS. Keep in step with FDD0_SLOT_ID /
     // FDD1_SLOT_ID / HDD0_SLOT_ID / HDD1_SLOT_ID in the firmware and the slots in data.json.
     reg [31:0] fdd0_slot_bytes_74a = 32'd0;
     reg [31:0] fdd1_slot_bytes_74a = 32'd0;
-    reg [31:0] hdd0_slot_bytes_74a = 32'd0;
-    reg [31:0] hdd1_slot_bytes_74a = 32'd0;
     always @(posedge clk_74a) begin
         if (dataslot_update && dataslot_update_id == 16'd2)
             fdd0_slot_bytes_74a <= dataslot_update_size;
         if (dataslot_update && dataslot_update_id == 16'd3)
             fdd1_slot_bytes_74a <= dataslot_update_size;
-        if (dataslot_update && dataslot_update_id == 16'd4)
-            hdd0_slot_bytes_74a <= dataslot_update_size;
-        if (dataslot_update && dataslot_update_id == 16'd5)
-            hdd1_slot_bytes_74a <= dataslot_update_size;
     end
 
     wire [31:0] fdd0_slot_bytes;
