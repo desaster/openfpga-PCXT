@@ -635,6 +635,8 @@ module core_top (
     wire [1:0] opl2_cfg;
     wire [1:0] boost_cfg;
     wire [1:0] spk_vol_cfg;
+    wire [1:0] stereo_mix_cfg;
+    wire       cms_cfg;
     wire       ems_en_cfg;
     wire [1:0] ems_frame_cfg;
     wire       a000_en_cfg;
@@ -649,6 +651,8 @@ module core_top (
     synch_3 #(.WIDTH(2)) s_opl2_cfg       (osd_opl2,          opl2_cfg,      clk_chipset);
     synch_3 #(.WIDTH(2)) s_boost_cfg      (osd_boost,         boost_cfg,     clk_chipset);
     synch_3 #(.WIDTH(2)) s_spk_vol_cfg    (osd_spk_vol,       spk_vol_cfg,   clk_chipset);
+    synch_3 #(.WIDTH(2)) s_stereo_cfg     (osd_stereo,        stereo_mix_cfg, clk_chipset);
+    synch_3              s_cms_cfg        (osd_cms,           cms_cfg,       clk_chipset);
     synch_3              s_composite_cfg  (osd_composite,     composite_cfg, clk_chipset);
     synch_3              s_ems_en_cfg     (osd_ems,           ems_en_cfg,    clk_chipset);
     synch_3 #(.WIDTH(2)) s_ems_frame_cfg  (osd_ems_frame,     ems_frame_cfg, clk_chipset);
@@ -898,6 +902,8 @@ module core_top (
     wire [1:0] osd_opl2;
     wire [1:0] osd_boost;
     wire [1:0] osd_spk_vol;
+    wire [1:0] osd_stereo;
+    wire       osd_cms;
     wire       osd_composite;
     wire       osd_ems;
     wire [1:0] osd_ems_frame;
@@ -977,6 +983,8 @@ module core_top (
         .osd_opl2                   (osd_opl2),
         .osd_boost                  (osd_boost),
         .osd_spk_vol                (osd_spk_vol),
+        .osd_stereo                 (osd_stereo),
+        .osd_cms                    (osd_cms),
         .osd_composite              (osd_composite),
         .osd_ems                    (osd_ems),
         .osd_ems_frame              (osd_ems_frame),
@@ -1712,7 +1720,7 @@ module core_top (
 		.jtopl2_snd_e                       (jtopl2_snd_e),
 		.tandy_snd_e                        (tandy_snd_e),
 		.opl2_io                            (xtctl[4] ? 2'b10 : opl2_cfg),
-		.cms_en                             (~status[10]),
+		.cms_en                             (cms_cfg),
 		.o_cms_l                            (cms_l_snd_e),
 		.o_cms_r                            (cms_r_snd_e),
 		.tandy_video                        (tandy_video_mode),
@@ -1877,6 +1885,8 @@ module core_top (
         end
     endfunction
 
+    reg [15:0] mix_l, mix_r;
+
     reg [15:0] cmp_l;
     reg [15:0] out_l;
     always @(posedge clk_chipset)
@@ -1888,9 +1898,9 @@ module core_top (
         // clamp the output
         out_l <= (^tmp_l[16:15]) ? {tmp_l[16], {15{tmp_l[15]}}} : tmp_l[15:0];
 
-        cmp_l <= compr(out_l);
+        cmp_l <= compr(mix_l);
     end
-	 
+
     reg [15:0] cmp_r;
     reg [15:0] out_r;
     always @(posedge clk_chipset)
@@ -1902,12 +1912,35 @@ module core_top (
         // clamp the output
         out_r <= (^tmp_r[16:15]) ? {tmp_r[16], {15{tmp_r[15]}}} : tmp_r[15:0];
 
-        cmp_r <= compr(out_r);
+        cmp_r <= compr(mix_r);
+    end
+
+    // Stereo mix (replaces the MiSTer framework AUDIO_MIX handling); the samples
+    // are signed, so the crossfeed fractions keep the sign bit.
+    always @(*) begin
+        case (stereo_mix_cfg)
+            2'd1: begin // 25%
+                mix_l = $signed(out_l) - $signed(out_l[15:3]) + $signed(out_r[15:3]);
+                mix_r = $signed(out_r) - $signed(out_r[15:3]) + $signed(out_l[15:3]);
+            end
+            2'd2: begin // 50%
+                mix_l = $signed(out_l) - $signed(out_l[15:2]) + $signed(out_r[15:2]);
+                mix_r = $signed(out_r) - $signed(out_r[15:2]) + $signed(out_l[15:2]);
+            end
+            2'd3: begin // mono
+                mix_l = $signed(out_l[15:1]) + $signed(out_r[15:1]);
+                mix_r = $signed(out_l[15:1]) + $signed(out_r[15:1]);
+            end
+            default: begin // no mix
+                mix_l = out_l;
+                mix_r = out_r;
+            end
+        endcase
     end
 
     // ---- Audio: 16-bit signed mix -> I2S (Pocket audio codec) ----
-    wire [15:0] audio_l = pause_core ? 16'd0 : (boost_cfg ? cmp_l : out_l);
-    wire [15:0] audio_r = pause_core ? 16'd0 : (boost_cfg ? cmp_r : out_r);
+    wire [15:0] audio_l = pause_core ? 16'd0 : (boost_cfg ? cmp_l : mix_l);
+    wire [15:0] audio_r = pause_core ? 16'd0 : (boost_cfg ? cmp_r : mix_r);
 
     sound_i2s #(.CHANNEL_WIDTH(16), .SIGNED_INPUT(1)) sound_i2s (
         .clk_74a    (clk_74a),

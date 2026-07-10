@@ -88,25 +88,25 @@ typedef struct {
 #define SETTING_LOCKED(a, v) { (a), (uint8_t) (sizeof(a) / sizeof((a)[0])), (v), 1 }
 
 static setting_t settings[SET_COUNT] = {
-    SETTING(opt_cpu),              // SET_CPU_SPEED
-    SETTING(opt_bios_wr),          // SET_BIOS_WR
-    SETTING(opt_opl2),             // SET_OPL2
-    SETTING(opt_boost),            // SET_BOOST
-    SETTING(opt_level4),           // SET_SPK_VOL
-    SETTING_LOCKED(opt_stereo, 0), // SET_STEREO
-    SETTING_LOCKED(opt_dis_en, 0), // SET_CMS
-    SETTING(opt_off_on),           // SET_COMPOSITE
-    SETTING(opt_display),          // SET_DISPLAY
-    SETTING_D(opt_dis_en, 1),      // SET_EMS (default Enabled, as the fixed memory map was)
-    SETTING(opt_ems_frame),        // SET_EMS_FRAME
-    SETTING_D(opt_dis_en, 1),      // SET_A000 (default Enabled)
-    SETTING_D(opt_joy, 1),         // SET_JOY1 (default Digital; built-in pad has no stick)
-    SETTING_D(opt_joy, 2),         // SET_JOY2 (default Disabled)
-    SETTING(opt_no_yes),           // SET_SWAPJOY
-    SETTING(opt_no_yes),           // SET_SYNCJOY
-    SETTING(opt_video_1st),        // SET_VIDEO_1ST (applied by the BIOS at the next Reset PC)
-    SETTING(opt_yes_no),           // SET_CGA_GFX (Yes = the card's I/O decode responds)
-    SETTING(opt_yes_no),           // SET_HGC_GFX
+    SETTING(opt_cpu),         // SET_CPU_SPEED
+    SETTING(opt_bios_wr),     // SET_BIOS_WR
+    SETTING(opt_opl2),        // SET_OPL2
+    SETTING(opt_boost),       // SET_BOOST
+    SETTING(opt_level4),      // SET_SPK_VOL
+    SETTING(opt_stereo),      // SET_STEREO
+    SETTING_D(opt_dis_en, 1), // SET_CMS (default Enabled)
+    SETTING(opt_off_on),      // SET_COMPOSITE
+    SETTING(opt_display),     // SET_DISPLAY
+    SETTING_D(opt_dis_en, 1), // SET_EMS (default Enabled, as the fixed memory map was)
+    SETTING(opt_ems_frame),   // SET_EMS_FRAME
+    SETTING_D(opt_dis_en, 1), // SET_A000 (default Enabled)
+    SETTING_D(opt_joy, 1),    // SET_JOY1 (default Digital; built-in pad has no stick)
+    SETTING_D(opt_joy, 2),    // SET_JOY2 (default Disabled)
+    SETTING(opt_no_yes),      // SET_SWAPJOY
+    SETTING(opt_no_yes),      // SET_SYNCJOY
+    SETTING(opt_video_1st),   // SET_VIDEO_1ST (applied by the BIOS at the next Reset PC)
+    SETTING(opt_yes_no),      // SET_CGA_GFX (Yes = the card's I/O decode responds)
+    SETTING(opt_yes_no),      // SET_HGC_GFX
 };
 
 // Compiled defaults, snapshotted at boot before the save is adopted, for Reset to Defaults.

@@ -96,6 +96,8 @@ module softcpu_subsystem (
     output  [1:0] osd_opl2,
     output  [1:0] osd_boost,
     output  [1:0] osd_spk_vol,
+    output  [1:0] osd_stereo,
+    output        osd_cms,
     output        osd_composite,
     output        osd_ems,
     output  [1:0] osd_ems_frame,
@@ -249,6 +251,8 @@ module softcpu_subsystem (
     localparam SET_IDX_OPL2      = 5'd2;
     localparam SET_IDX_BOOST     = 5'd3;
     localparam SET_IDX_SPK_VOL   = 5'd4;
+    localparam SET_IDX_STEREO    = 5'd5;
+    localparam SET_IDX_CMS       = 5'd6;
     localparam SET_IDX_COMPOSITE = 5'd7;
     localparam SET_IDX_DISPLAY   = 5'd8;
     localparam SET_IDX_EMS       = 5'd9;
@@ -274,6 +278,8 @@ module softcpu_subsystem (
     assign osd_opl2      = osd_settings[SET_IDX_OPL2][1:0];
     assign osd_boost     = osd_settings[SET_IDX_BOOST][1:0];
     assign osd_spk_vol   = osd_settings[SET_IDX_SPK_VOL][1:0];
+    assign osd_stereo    = osd_settings[SET_IDX_STEREO][1:0];
+    assign osd_cms       = osd_settings[SET_IDX_CMS][0];
     assign osd_composite = osd_settings[SET_IDX_COMPOSITE][0];
     assign osd_ems       = osd_settings[SET_IDX_EMS][0];
     assign osd_ems_frame = osd_settings[SET_IDX_EMS_FRAME][1:0];
