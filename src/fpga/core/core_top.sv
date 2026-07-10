@@ -567,8 +567,28 @@ module core_top (
     reg  [7:0] select_cfg_74a    = 8'hF1;  // Button Select: 0xF1 = Settings (default)
     reg  [7:0] start_cfg_74a     = 8'hF2;  // Button Start: 0xF2 = Pause/Credits (default)
     reg        credits_active_74a = 1'b0;  // credits showing: set by the menu action, cleared by any button
+    // Pad button words refresh from an unvalidated ~1 ms poll and can bounce; a
+    // single bad poll would false-edge every consumer. Publish a new word only after
+    // several polls agree. Analog joy words are level-read and pass through raw.
+    reg [15:0] cont1_key_s = 16'd0;        // settled button words, all consumers below
+    reg [15:0] cont2_key_s = 16'd0;
+    reg [15:0] key1_cand   = 16'd0;
+    reg [15:0] key2_cand   = 16'd0;
+    reg [17:0] key_stable  = 18'd0;        // 2^18 clk_74a cycles = 3.5 ms
+    always @(posedge clk_74a) begin
+        if (cont1_key != key1_cand || cont2_key != key2_cand) begin
+            key1_cand  <= cont1_key;
+            key2_cand  <= cont2_key;
+            key_stable <= 18'd0;
+        end else if (!(&key_stable))
+            key_stable <= key_stable + 18'd1;
+        else begin
+            cont1_key_s <= key1_cand;
+            cont2_key_s <= key2_cand;
+        end
+    end
     wire       any_btn_74a;                // any Pocket controller-1 button, synced to this domain
-    synch_3 s_anybtn (|cont1_key, any_btn_74a, clk_74a);
+    synch_3 s_anybtn (|cont1_key_s, any_btn_74a, clk_74a);
     wire       osd_reset_req_74a;          // OSD Reset PC request, synced from the softcore
     synch_3 s_osd_reset_74a (osd_reset_req, osd_reset_req_74a, clk_74a);
     wire       osd_credits_req_74a;        // OSD Show Credits request, synced from the softcore
@@ -647,8 +667,8 @@ module core_top (
     synch_3               s_gamepad       (gamepad_74a,       gamepad,       clk_chipset);
     synch_3 #(.WIDTH(8))  s_select_cfg    (select_cfg_74a,    select_cfg,    clk_chipset);
     synch_3 #(.WIDTH(8))  s_start_cfg     (start_cfg_74a,     start_cfg,     clk_chipset);
-    synch_3 #(.WIDTH(16)) s_cont1_chip    (cont1_key,         cont1_key_chip, clk_chipset);
-    synch_3 #(.WIDTH(16)) s_cont2_chip    (cont2_key,         cont2_key_chip, clk_chipset);
+    synch_3 #(.WIDTH(16)) s_cont1_chip    (cont1_key_s,       cont1_key_chip, clk_chipset);
+    synch_3 #(.WIDTH(16)) s_cont2_chip    (cont2_key_s,       cont2_key_chip, clk_chipset);
     synch_3 #(.WIDTH(32)) s_cont1_joy     (cont1_joy,         cont1_joy_chip, clk_chipset);
     synch_3 #(.WIDTH(32)) s_cont2_joy     (cont2_joy,         cont2_joy_chip, clk_chipset);
     synch_3 #(.WIDTH(3)) s_palette_cfg    (osd_palette,       palette_cfg,   clk_pix);
@@ -1591,7 +1611,7 @@ module core_top (
     pocket_keyboard u_pocket_keyboard (
         .clk          (clk_chipset),
         .reset        (reset),
-        .buttons      (cont1_key),
+        .buttons      (cont1_key_s),
         .gamepad      (gamepad),
         .osd_active   (osd_active | credits_mode_chip),
         .vkb_key      (vkb_key),
