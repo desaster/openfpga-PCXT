@@ -161,10 +161,10 @@
 
 // Dataslot ids of the floppy and hard-disk images. Must match the slots in
 // data.json (and the ids core_top latches the image sizes for).
-#define FDD0_SLOT_ID 2
-#define FDD1_SLOT_ID 3
-#define HDD0_SLOT_ID 4
-#define HDD1_SLOT_ID 5
+#define FDD0_SLOT_ID 3
+#define FDD1_SLOT_ID 4
+#define HDD0_SLOT_ID 5
+#define HDD1_SLOT_ID 6
 
 // Shared disk-bridge sector transfer (disk_tds.c).
 int tds_transfer(uint32_t slot, uint32_t lba, uint32_t dir);

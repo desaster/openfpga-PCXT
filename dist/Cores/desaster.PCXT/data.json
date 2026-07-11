@@ -3,7 +3,7 @@
     "magic": "APF_VER_1",
     "data_slots": [
       {
-        "name": "BIOS",
+        "name": "PCXT BIOS",
         "id": 1,
         "required": true,
         "parameters": "0x203",
@@ -13,16 +13,16 @@
         "size_maximum": "0x10000"
       },
       {
-        "name": "Floppy A",
+        "name": "EC00 BIOS",
         "id": 2,
         "required": false,
         "parameters": "0x01",
-        "deferload": true,
-        "extensions": ["img", "ima", "dsk", "vfd"],
-        "size_maximum": "0x300000"
+        "extensions": ["rom", "bin"],
+        "address": "0x10010000",
+        "size_maximum": "0x4000"
       },
       {
-        "name": "Floppy B",
+        "name": "Floppy A",
         "id": 3,
         "required": false,
         "parameters": "0x01",
@@ -31,16 +31,16 @@
         "size_maximum": "0x300000"
       },
       {
-        "name": "IDE 0-0",
+        "name": "Floppy B",
         "id": 4,
         "required": false,
-        "parameters": "0x281",
+        "parameters": "0x01",
         "deferload": true,
-        "extensions": ["vhd", "img"],
-        "size_maximum": "0x40000000"
+        "extensions": ["img", "ima", "dsk", "vfd"],
+        "size_maximum": "0x300000"
       },
       {
-        "name": "IDE 0-1",
+        "name": "IDE 0-0",
         "id": 5,
         "required": false,
         "parameters": "0x281",
@@ -49,8 +49,17 @@
         "size_maximum": "0x40000000"
       },
       {
-        "name": "Settings",
+        "name": "IDE 0-1",
         "id": 6,
+        "required": false,
+        "parameters": "0x281",
+        "deferload": true,
+        "extensions": ["vhd", "img"],
+        "size_maximum": "0x40000000"
+      },
+      {
+        "name": "Settings",
+        "id": 7,
         "required": false,
         "parameters": "0x22",
         "nonvolatile": true,

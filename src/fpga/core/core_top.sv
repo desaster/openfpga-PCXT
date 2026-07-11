@@ -733,12 +733,12 @@ module core_top (
     wire  [2:0] target_dataslot_err;
 
     // Data table (dataslot ID/size), two words per slot index, also written by APF at
-    // load. Rotate: redeclare the Settings size (word 11; absent on first boot, and a
-    // 0-size slot never flushes) and scan the hard-disk sizes (words 7/9; a persisted
+    // load. Rotate: redeclare the Settings size (word 13; absent on first boot, and a
+    // 0-size slot never flushes) and scan the hard-disk sizes (words 9/11; a persisted
     // image appears only here, never as a dataslot update). Reads land two cycles
     // after the address.
     reg  [2:0]  datatable_phase = 3'd0;
-    reg  [9:0]  datatable_addr  = 10'd11;
+    reg  [9:0]  datatable_addr  = 10'd13;
     reg         datatable_wren  = 1'b0;
     reg  [31:0] datatable_data  = 32'd64;
     wire [31:0] datatable_q;
@@ -748,14 +748,14 @@ module core_top (
         datatable_phase <= datatable_phase + 3'd1;
         datatable_wren  <= 1'b0;
         case (datatable_phase)
-            3'd0: datatable_addr <= 10'd7;      // IDE 0-0 size word (index 3*2+1)
+            3'd0: datatable_addr <= 10'd9;      // IDE 0-0 size word (index 4*2+1)
             3'd3: begin
                 hdd0_slot_bytes_74a <= datatable_q;
-                datatable_addr      <= 10'd9;   // IDE 0-1 size word (index 4*2+1)
+                datatable_addr      <= 10'd11;  // IDE 0-1 size word (index 5*2+1)
             end
             3'd6: begin
                 hdd1_slot_bytes_74a <= datatable_q;
-                datatable_addr      <= 10'd11;  // Settings size word (index 5*2+1)
+                datatable_addr      <= 10'd13;  // Settings size word (index 6*2+1)
                 datatable_wren      <= 1'b1;
             end
         endcase
@@ -839,15 +839,16 @@ module core_top (
     // management bus. A floppy image's size is reported once as a dataslot update
     // (bytes); the hard-disk sizes come from the data table scan above. Convert to
     // sectors on the chipset clock and hand them to the firmware.
-    // Floppy images are dataslot id 2 (drive 0) and id 3 (drive 1); the hard disks are
-    // id 4 (master) and id 5 (slave); id 1 is the BIOS. Keep in step with FDD0_SLOT_ID /
-    // FDD1_SLOT_ID / HDD0_SLOT_ID / HDD1_SLOT_ID in the firmware and the slots in data.json.
+    // Floppy images are dataslot id 3 (drive 0) and id 4 (drive 1); the hard disks are
+    // id 5 (master) and id 6 (slave); id 1 is the main BIOS and id 2 the EC00 option
+    // ROM. Keep in step with FDD0_SLOT_ID / FDD1_SLOT_ID / HDD0_SLOT_ID / HDD1_SLOT_ID
+    // in the firmware and the slots in data.json.
     reg [31:0] fdd0_slot_bytes_74a = 32'd0;
     reg [31:0] fdd1_slot_bytes_74a = 32'd0;
     always @(posedge clk_74a) begin
-        if (dataslot_update && dataslot_update_id == 16'd2)
-            fdd0_slot_bytes_74a <= dataslot_update_size;
         if (dataslot_update && dataslot_update_id == 16'd3)
+            fdd0_slot_bytes_74a <= dataslot_update_size;
+        if (dataslot_update && dataslot_update_id == 16'd4)
             fdd1_slot_bytes_74a <= dataslot_update_size;
     end
 
@@ -1198,18 +1199,19 @@ module core_top (
         .write_data          (dl_data)
     );
 
-    // Decoupling FIFO (same clk_chipset domain), entry = {addr[24:0], data[15:0]}.
-    // 256 deep: generous headroom; the handshake loader keeps pace so it stays
+    // Decoupling FIFO (same clk_chipset domain), entry = {xtide, addr[24:0], data[15:0]}.
+    // The slot tag rides in each entry so a following stream cannot retag a draining
+    // tail. 256 deep: generous headroom; the handshake loader keeps pace so it stays
     // shallow. An overflow would drop a write (and fail POST), but cannot happen
     // here: the consumer keeps pace and load_active holds reset until it drains.
     localparam RLF_AW = 8;
-    reg  [40:0]     romfifo [0:(1<<RLF_AW)-1];
+    reg  [41:0]     romfifo [0:(1<<RLF_AW)-1];
     reg  [RLF_AW:0] rlf_wptr = 0;
     reg  [RLF_AW:0] rlf_rptr = 0;
     wire            rlf_empty = (rlf_wptr == rlf_rptr);
     wire            rlf_full  = (rlf_wptr[RLF_AW-1:0] == rlf_rptr[RLF_AW-1:0])
                               && (rlf_wptr[RLF_AW] != rlf_rptr[RLF_AW]);
-    wire [40:0]     rlf_head  = romfifo[rlf_rptr[RLF_AW-1:0]];
+    wire [41:0]     rlf_head  = romfifo[rlf_rptr[RLF_AW-1:0]];
     reg             rlf_pop;
 
     // Drain gate: keep loading until APF is done AND the FIFO is emptied, so the
@@ -1218,7 +1220,7 @@ module core_top (
 
     always @(posedge clk_chipset) begin
         if (dl_wr && ~rlf_full) begin
-            romfifo[rlf_wptr[RLF_AW-1:0]] <= {dl_addr[24:0], dl_data};
+            romfifo[rlf_wptr[RLF_AW-1:0]] <= {download_id == 16'd2, dl_addr[24:0], dl_data};
             rlf_wptr <= rlf_wptr + 1'b1;
         end
         if (rlf_pop && ~rlf_empty)
@@ -1227,7 +1229,7 @@ module core_top (
 
     // Copier: present the FIFO head to the BIOS FSM as ioctl, honoring ioctl_wait.
     assign ioctl_download = load_active;
-    assign ioctl_index    = (download_id == 16'd2) ? 8'd2 : 8'd0;  // XT-IDE->2, BIOS->0
+    assign ioctl_index    = rlf_head[41] ? 8'd2 : 8'd0;  // EC00 (XT-IDE)->2, BIOS->0
     assign ioctl_addr     = rlf_head[40:16];
     assign ioctl_data     = rlf_head[15:0];
     reg ioctl_wr_r = 1'b0;
