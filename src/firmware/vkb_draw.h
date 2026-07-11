@@ -27,7 +27,7 @@ enum {
     OSD_CURSOR = 6,    // selected-key highlight
     OSD_LATCH = 7,     // latched (held-down) key
     OSD_LATCH_CUR = 8, // latched key under the cursor
-    OSD_DISABLED = 9   // dimmed text for a shown-but-locked menu row
+    OSD_DISABLED = 9   // dimmed text (palette entry exists in hardware; no current user)
 };
 
 void osd_fill_rect(const osd_fb_t *fb, int x, int y, int w, int h, uint8_t color);

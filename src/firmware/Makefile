@@ -12,7 +12,7 @@ SIZE    = llvm-size
 
 # -MMD -MP write per-object header dependencies (.d), pulled in by -include below, so
 # editing a header rebuilds every object that includes it.
-CFLAGS  = --target=riscv32 -march=rv32im -std=c99 -Os -fno-inline -mno-relax -Wall -Werror -MMD -MP
+CFLAGS  = --target=riscv32 -march=rv32im -std=c99 -Os -mno-relax -Wall -Werror -MMD -MP
 ASFLAGS = --target=riscv32 -march=rv32im -mno-relax -Wall -Werror -MMD -MP
 
 all: firmware.vh

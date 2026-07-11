@@ -1,10 +1,10 @@
 #include "vkb_layout.h"
 
-#define K(x, y, w, h, sc, lbl)     { (x), (y), (w), (h), (sc), (lbl), 0, OSD_KEYFACE }
-#define K2(x, y, w, h, sc, l1, l2) { (x), (y), (w), (h), (sc), (l1), (l2), OSD_KEYFACE }
+#define K(x, y, w, h, sc, lbl)     { (lbl), 0, (x), (w), (y), (h), (sc), OSD_KEYFACE }
+#define K2(x, y, w, h, sc, l1, l2) { (l1), (l2), (x), (w), (y), (h), (sc), OSD_KEYFACE }
 // Accent-face variants, for the function and control keys.
-#define KA(x, y, w, h, sc, lbl)     { (x), (y), (w), (h), (sc), (lbl), 0, OSD_KEYACCENT }
-#define K2A(x, y, w, h, sc, l1, l2) { (x), (y), (w), (h), (sc), (l1), (l2), OSD_KEYACCENT }
+#define KA(x, y, w, h, sc, lbl)     { (lbl), 0, (x), (w), (y), (h), (sc), OSD_KEYACCENT }
+#define K2A(x, y, w, h, sc, l1, l2) { (l1), (l2), (x), (w), (y), (h), (sc), OSD_KEYACCENT }
 
 // CP437 arrow glyphs, for the keypad arrow legends.
 #define GL_LEFT  "\x1b" // <-

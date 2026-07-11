@@ -80,12 +80,10 @@ typedef struct {
     const char *const *opts;
     uint8_t count;
     uint8_t value;
-    uint8_t locked; // shown but not editable (no hardware path for the setting)
 } setting_t;
 
-#define SETTING(a)           { (a), (uint8_t) (sizeof(a) / sizeof((a)[0])), 0, 0 }
-#define SETTING_D(a, d)      { (a), (uint8_t) (sizeof(a) / sizeof((a)[0])), (d), 0 }
-#define SETTING_LOCKED(a, v) { (a), (uint8_t) (sizeof(a) / sizeof((a)[0])), (v), 1 }
+#define SETTING(a)      { (a), (uint8_t) (sizeof(a) / sizeof((a)[0])), 0 }
+#define SETTING_D(a, d) { (a), (uint8_t) (sizeof(a) / sizeof((a)[0])), (d) }
 
 static setting_t settings[SET_COUNT] = {
     SETTING(opt_cpu),         // SET_CPU_SPEED
@@ -199,23 +197,20 @@ static void draw_frame(void)
 }
 
 // Repaint one menu row: erase its interior (the frame columns stay), then the cursor, label, and
-// either the current value (option) or a submenu marker. A locked option is drawn dimmed so it
-// reads as unavailable.
+// either the current value (option) or a submenu marker.
 static void draw_row(int i)
 {
     const item_t *it = &menus[cur_menu].items[i];
     int y = (ROW_FIRST + i) * 8;
-    int locked = (it->type == IT_OPTION) && settings[it->arg].locked;
-    uint8_t text = locked ? OSD_DISABLED : OSD_LABEL;
 
     osd_fill_rect(&panel, 8, y, (PANEL_COLS - 2) * 8, 8, OSD_KEYFACE);
     if (i == cur_row) {
         osd_draw_char(&panel, COL_CURSOR * 8, y, G_MARKER, OSD_CURSOR);
     }
-    osd_draw_string(&panel, COL_LABEL * 8, y, it->label, text);
+    osd_draw_string(&panel, COL_LABEL * 8, y, it->label, OSD_LABEL);
     if (it->type == IT_OPTION) {
         const setting_t *s = &settings[it->arg];
-        osd_draw_string(&panel, COL_VALUE * 8, y, s->opts[s->value], text);
+        osd_draw_string(&panel, COL_VALUE * 8, y, s->opts[s->value], OSD_LABEL);
     } else if (it->type == IT_SUBMENU) {
         osd_draw_char(&panel, COL_VALUE * 8, y, G_MARKER, OSD_LABEL);
     }
@@ -293,9 +288,6 @@ int settings_input(uint16_t pressed)
     const item_t *it = &menus[cur_menu].items[cur_row];
     if (it->type == IT_OPTION) {
         setting_t *s = &settings[it->arg];
-        if (s->locked) {
-            return 0; // locked: shown but not editable
-        }
         int changed = 1;
         if (pressed & (BTN_A | BTN_RIGHT)) {
             s->value = (uint8_t) ((s->value + 1) % s->count);
@@ -361,9 +353,8 @@ void settings_load(void)
                 word = *FDD_BRAM_RDATA;
             }
             uint8_t v = (word >> ((i & 3) * 8)) & 0xFF;
-            // Ignore an out-of-range value from an older blob, and never let a saved value pull a
-            // locked setting off its pinned default.
-            if (v < settings[i].count && !settings[i].locked) {
+            // Ignore an out-of-range value from an older blob.
+            if (v < settings[i].count) {
                 settings[i].value = v;
             }
         }
