@@ -460,6 +460,39 @@ module PERIPHERALS #(
     wire    clear_keycode = port_b_out[7];
     wire    ps2_reset_n   = ~tandy_video ? port_b_out[6] : 1'b1;
 
+    // Keyboard self-test response: releasing the port-B reset line makes a real XT
+    // keyboard run its self-test and send 0xAA, and the BIOS keyboard POST depends on
+    // seeing that byte. Inject it into the Set-2 stream after roughly a real
+    // keyboard's reset-to-response delay, holding off the external stream meanwhile.
+    localparam [16:0] KB_BAT_DELAY = 17'd100000;    // ~2 ms
+    logic           prev_ps2_reset_n;
+    logic   [16:0]  kb_bat_delay_cnt;
+    logic           kb_ready_int;
+    wire            kb_bat_pending = (kb_bat_delay_cnt == 17'd1);
+    wire    [7:0]   kb_byte_int    = kb_bat_pending ? 8'hAA : kb_byte;
+    wire            kb_valid_int   = kb_bat_pending ? 1'b1  : kb_valid;
+    assign  kb_ready = kb_bat_pending ? 1'b0 : kb_ready_int;
+
+    always_ff @(posedge clock, posedge reset)
+    begin
+        if (reset)
+            prev_ps2_reset_n <= 1'b0;
+        else
+            prev_ps2_reset_n <= ps2_reset_n;
+    end
+
+    always_ff @(posedge clock, posedge reset)
+    begin
+        if (reset)
+            kb_bat_delay_cnt <= 17'd0;
+        else if (~prev_ps2_reset_n & ps2_reset_n)
+            kb_bat_delay_cnt <= KB_BAT_DELAY;
+        else if (kb_bat_pending)
+            kb_bat_delay_cnt <= kb_ready_int ? 17'd0 : kb_bat_delay_cnt;
+        else if (kb_bat_delay_cnt != 17'd0)
+            kb_bat_delay_cnt <= kb_bat_delay_cnt - 17'd1;
+    end
+
     KFPS2KB u_KFPS2KB
     (
         // Bus
@@ -467,9 +500,9 @@ module PERIPHERALS #(
         .reset                      (reset),
 
         // Set-2 byte in
-        .kb_byte                    (kb_byte),
-        .kb_valid                   (kb_valid),
-        .kb_ready                   (kb_ready),
+        .kb_byte                    (kb_byte_int),
+        .kb_valid                   (kb_valid_int),
+        .kb_ready                   (kb_ready_int),
 
         // I/O
         .irq                        (keybord_irq),
