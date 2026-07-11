@@ -217,6 +217,38 @@ static void ide_put_lba(uint32_t lba)
     }
 }
 
+// Abort the current command: complete it as failed and return the channel to idle.
+static void ide_abort(void)
+{
+    R.status = ATA_RDY | ATA_ERR | ATA_IRQ;
+    R.error = ATA_ERR_ABRT;
+    ide_set_regs();
+    ide_state = IDE_STATE_IDLE;
+}
+
+// Spin until the guest engages the next data phase (req 5). Zero on timeout or any
+// other request, which ends the transfer.
+static int ide_wait_data_req(void)
+{
+    uint32_t req = 0;
+    uint32_t to = DISK_SPIN_LIMIT;
+    while (!req && --to) {
+        req = *IDE_REQUEST;
+    }
+    return req == IDE_REQ_DATA;
+}
+
+// Sectors in the next data phase: one in single mode, up to the drive's block in
+// multiple mode.
+static uint32_t ide_block_count(uint32_t remaining, int multi)
+{
+    if (!multi) {
+        return 1;
+    }
+    uint32_t cnt = (remaining < dsel->spb) ? remaining : dsel->spb;
+    return cnt ? cnt : 1;
+}
+
 // READ SECTOR(S) / READ MULTIPLE: transfer sectors until the count is exhausted. In
 // single mode one sector is a data phase; in multiple mode up to the drive's block size
 // sectors are streamed into ide.v's buffer and delivered as one phase (io_size = the
@@ -229,13 +261,7 @@ static void ide_process_read(int multi)
     uint32_t slot = hdd_slot(R.drv);
 
     while (1) {
-        uint32_t cnt = 1;
-        if (multi) {
-            cnt = (remaining < dsel->spb) ? remaining : dsel->spb;
-            if (!cnt) {
-                cnt = 1;
-            }
-        }
+        uint32_t cnt = ide_block_count(remaining, multi);
 
         // Each sector pushes 256 words to the data port; the port address is never a
         // non-data register between them, so ide.v's buffer pointer keeps counting and
@@ -257,10 +283,7 @@ static void ide_process_read(int multi)
 
         if (!ok) {
             // A dataslot read stalled; report an error rather than stream stale data.
-            R.status = ATA_RDY | ATA_ERR | ATA_IRQ;
-            R.error = ATA_ERR_ABRT;
-            ide_set_regs();
-            ide_state = IDE_STATE_IDLE;
+            ide_abort();
             break;
         }
 
@@ -275,12 +298,7 @@ static void ide_process_read(int multi)
             break;
         }
 
-        uint32_t req = 0;
-        uint32_t to = DISK_SPIN_LIMIT;
-        while (!req && --to) {
-            req = *IDE_REQUEST;
-        }
-        if (req != IDE_REQ_DATA) {
+        if (!ide_wait_data_req()) {
             ide_state = IDE_STATE_IDLE;
             break;
         }
@@ -301,13 +319,7 @@ static void ide_process_write(int multi)
     uint32_t irq = 0;
 
     while (1) {
-        uint32_t cnt = 1;
-        if (multi) {
-            cnt = (remaining < dsel->spb) ? remaining : dsel->spb;
-            if (!cnt) {
-                cnt = 1;
-            }
-        }
+        uint32_t cnt = ide_block_count(remaining, multi);
 
         R.sector_count = remaining;
         R.io_size = cnt;
@@ -315,12 +327,7 @@ static void ide_process_write(int multi)
         irq = ATA_IRQ;
         ide_set_regs();
 
-        uint32_t req = 0;
-        uint32_t to = DISK_SPIN_LIMIT;
-        while (!req && --to) {
-            req = *IDE_REQUEST;
-        }
-        if (req != IDE_REQ_DATA) {
+        if (!ide_wait_data_req()) {
             ide_state = IDE_STATE_IDLE;
             break;
         }
@@ -343,10 +350,7 @@ static void ide_process_write(int multi)
 
         if (!ok) {
             // A dataslot write stalled; report an error rather than lose more data.
-            R.status = ATA_RDY | ATA_ERR | ATA_IRQ;
-            R.error = ATA_ERR_ABRT;
-            ide_set_regs();
-            ide_state = IDE_STATE_IDLE;
+            ide_abort();
             break;
         }
 
@@ -710,16 +714,11 @@ void ide_poll(void)
         ide_get_regs();
         int err = drive_present(R.drv) ? ide_handle_cmd() : 1;
         if (err) {
-            R.status = ATA_RDY | ATA_ERR | ATA_IRQ;
-            R.error = ATA_ERR_ABRT;
-            ide_set_regs();
+            ide_abort();
         }
     } else if (req == IDE_REQ_DATA) {
         // Data phase outside a transfer: nothing queued it, so abort.
-        ide_state = IDE_STATE_IDLE;
-        R.status = ATA_RDY | ATA_ERR | ATA_IRQ;
-        R.error = ATA_ERR_ABRT;
-        ide_set_regs();
+        ide_abort();
     } else if (req == IDE_REQ_RESET) {
         ide_get_regs();
         R.head = 0;

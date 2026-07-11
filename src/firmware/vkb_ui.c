@@ -249,6 +249,76 @@ static void button_function(uint8_t fn)
     }
 }
 
+// Keyboard-mode input: navigation and the key buttons. Nonzero when the user closed
+// the keyboard (button B), mirroring settings_input's contract.
+static int vkb_input(uint16_t pressed, uint16_t buttons)
+{
+    if (pressed & BTN_B) { // close the keyboard
+        vkb_release_all();
+        return 1;
+    }
+    if (pressed & BTN_R1) { // swap the OSD between bottom and top, redrawing at the new spot
+        ui_osd_top = !ui_osd_top;
+        osd.y0 = ui_osd_top ? 0 : (OSD_FB_HEIGHT - osd.height);
+        osd_origin_write();
+        vkb_draw_keyboard(&osd, cur_key);
+    }
+    // D-pad: a fresh press moves once; holding past REPEAT_DELAY repeats at
+    // REPEAT_RATE. A short cooldown debounces each move; diagonals resolve to
+    // vertical.
+    uint16_t dpad_ev = pressed & BTN_DPAD;
+    uint32_t now = rdcycle();
+    ui_repeat_btn &= buttons; // drop any direction no longer held (stale-repeat guard)
+    if (buttons & BTN_DPAD) {
+        if (pressed & BTN_DPAD) {
+            ui_repeat_btn = buttons & BTN_DPAD;
+            ui_repeat_timer = now + REPEAT_DELAY;
+            if ((int32_t) (now - ui_move_cooldown) < 0) {
+                dpad_ev = 0;
+            }
+        } else if ((int32_t) (now - ui_repeat_timer) >= 0) {
+            dpad_ev |= ui_repeat_btn;
+            ui_repeat_timer = now + REPEAT_RATE;
+        }
+    } else {
+        ui_repeat_btn = 0;
+        ui_move_cooldown = now;
+    }
+    if ((dpad_ev & (BTN_UP | BTN_DOWN)) && (dpad_ev & (BTN_LEFT | BTN_RIGHT))) {
+        dpad_ev &= BTN_UP | BTN_DOWN;
+    }
+    if (dpad_ev & BTN_UP) {
+        cursor_move(0, -1);
+    }
+    if (dpad_ev & BTN_DOWN) {
+        cursor_move(0, 1);
+    }
+    if (dpad_ev & BTN_LEFT) {
+        cursor_move(-1, 0);
+    }
+    if (dpad_ev & BTN_RIGHT) {
+        cursor_move(1, 0);
+    }
+    if (dpad_ev) {
+        ui_move_cooldown = now + MOVE_COOLDOWN;
+    }
+    if (pressed & BTN_X) { // latch/unlatch (hold modifiers for chords)
+        int on = !is_latched(cur_key);
+        set_latched(cur_key, on);
+        vkb_emit(on, vkb_keys[cur_key].scancode);
+        vkb_key_border(&osd, cur_key, key_color(cur_key));
+    }
+    if (pressed & BTN_Y) { // clear every latched key
+        vkb_clear_latches();
+    }
+    // A momentarily presses a non-latched key; typematic then repeats it while held.
+    if ((pressed & BTN_A) && !is_latched(cur_key)) {
+        vkb_emit(1, vkb_keys[cur_key].scancode);
+        held_key = cur_key;
+    }
+    return 0;
+}
+
 void vkb_ui_tick(void)
 {
     uint32_t raw = *CONT1_KEY;
@@ -320,70 +390,9 @@ void vkb_ui_tick(void)
     // a make/break scancode key cannot be momentary and latched at once, so the two
     // are kept apart.
     if (ui_mode == OSD_VKB && held_key < 0) {
-        if (pressed & BTN_B) { // close the keyboard
-            vkb_release_all();
+        if (vkb_input(pressed, buttons)) { // nonzero = user closed the keyboard
             ui_mode = OSD_NONE;
             osd_ctrl_write();
-            return;
-        }
-        if (pressed & BTN_R1) { // swap the OSD between bottom and top, redrawing at the new spot
-            ui_osd_top = !ui_osd_top;
-            osd.y0 = ui_osd_top ? 0 : (OSD_FB_HEIGHT - osd.height);
-            osd_origin_write();
-            vkb_draw_keyboard(&osd, cur_key);
-        }
-        // D-pad: a fresh press moves once; holding past REPEAT_DELAY repeats at
-        // REPEAT_RATE. A short cooldown debounces each move; diagonals resolve to
-        // vertical.
-        uint16_t dpad_ev = pressed & BTN_DPAD;
-        uint32_t now = rdcycle();
-        ui_repeat_btn &= buttons; // drop any direction no longer held (stale-repeat guard)
-        if (buttons & BTN_DPAD) {
-            if (pressed & BTN_DPAD) {
-                ui_repeat_btn = buttons & BTN_DPAD;
-                ui_repeat_timer = now + REPEAT_DELAY;
-                if ((int32_t) (now - ui_move_cooldown) < 0) {
-                    dpad_ev = 0;
-                }
-            } else if ((int32_t) (now - ui_repeat_timer) >= 0) {
-                dpad_ev |= ui_repeat_btn;
-                ui_repeat_timer = now + REPEAT_RATE;
-            }
-        } else {
-            ui_repeat_btn = 0;
-            ui_move_cooldown = now;
-        }
-        if ((dpad_ev & (BTN_UP | BTN_DOWN)) && (dpad_ev & (BTN_LEFT | BTN_RIGHT))) {
-            dpad_ev &= BTN_UP | BTN_DOWN;
-        }
-        if (dpad_ev & BTN_UP) {
-            cursor_move(0, -1);
-        }
-        if (dpad_ev & BTN_DOWN) {
-            cursor_move(0, 1);
-        }
-        if (dpad_ev & BTN_LEFT) {
-            cursor_move(-1, 0);
-        }
-        if (dpad_ev & BTN_RIGHT) {
-            cursor_move(1, 0);
-        }
-        if (dpad_ev) {
-            ui_move_cooldown = now + MOVE_COOLDOWN;
-        }
-        if (pressed & BTN_X) { // latch/unlatch (hold modifiers for chords)
-            int on = !is_latched(cur_key);
-            set_latched(cur_key, on);
-            vkb_emit(on, vkb_keys[cur_key].scancode);
-            vkb_key_border(&osd, cur_key, key_color(cur_key));
-        }
-        if (pressed & BTN_Y) { // clear every latched key
-            vkb_clear_latches();
-        }
-        // A momentarily presses a non-latched key; typematic then repeats it while held.
-        if ((pressed & BTN_A) && !is_latched(cur_key)) {
-            vkb_emit(1, vkb_keys[cur_key].scancode);
-            held_key = cur_key;
         }
     }
 }
