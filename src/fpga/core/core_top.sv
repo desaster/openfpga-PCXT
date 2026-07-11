@@ -1885,8 +1885,6 @@ module core_top (
         end
     endfunction
 
-    reg [15:0] mix_l, mix_r;
-
     reg [15:0] cmp_l;
     reg [15:0] out_l;
     always @(posedge clk_chipset)
@@ -1898,7 +1896,7 @@ module core_top (
         // clamp the output
         out_l <= (^tmp_l[16:15]) ? {tmp_l[16], {15{tmp_l[15]}}} : tmp_l[15:0];
 
-        cmp_l <= compr(mix_l);
+        cmp_l <= compr(out_l);
     end
 
     reg [15:0] cmp_r;
@@ -1912,41 +1910,25 @@ module core_top (
         // clamp the output
         out_r <= (^tmp_r[16:15]) ? {tmp_r[16], {15{tmp_r[15]}}} : tmp_r[15:0];
 
-        cmp_r <= compr(mix_r);
+        cmp_r <= compr(out_r);
     end
 
-    // Stereo mix (replaces the MiSTer framework AUDIO_MIX handling); the samples
-    // are signed, so the crossfeed fractions keep the sign bit.
-    always @(*) begin
-        case (stereo_mix_cfg)
-            2'd1: begin // 25%
-                mix_l = $signed(out_l) - $signed(out_l[15:3]) + $signed(out_r[15:3]);
-                mix_r = $signed(out_r) - $signed(out_r[15:3]) + $signed(out_l[15:3]);
-            end
-            2'd2: begin // 50%
-                mix_l = $signed(out_l) - $signed(out_l[15:2]) + $signed(out_r[15:2]);
-                mix_r = $signed(out_r) - $signed(out_r[15:2]) + $signed(out_l[15:2]);
-            end
-            2'd3: begin // mono
-                mix_l = $signed(out_l[15:1]) + $signed(out_r[15:1]);
-                mix_r = $signed(out_l[15:1]) + $signed(out_r[15:1]);
-            end
-            default: begin // no mix
-                mix_l = out_l;
-                mix_r = out_r;
-            end
-        endcase
-    end
+    // ---- Audio: filter chain + I2S (Pocket audio codec) ----
+    // audio_mixer stands in for the MiSTer framework back end: the default
+    // anti-aliasing low-pass + DC blocker (the raw mix carries square-wave
+    // harmonics past Nyquist), the AUDIO_MIX crossfeed, and the codec clocks.
+    wire [15:0] audio_l = pause_core ? 16'd0 : (boost_cfg ? cmp_l : out_l);
+    wire [15:0] audio_r = pause_core ? 16'd0 : (boost_cfg ? cmp_r : out_r);
 
-    // ---- Audio: 16-bit signed mix -> I2S (Pocket audio codec) ----
-    wire [15:0] audio_l = pause_core ? 16'd0 : (boost_cfg ? cmp_l : mix_l);
-    wire [15:0] audio_r = pause_core ? 16'd0 : (boost_cfg ? cmp_r : mix_r);
-
-    sound_i2s #(.CHANNEL_WIDTH(16), .SIGNED_INPUT(1)) sound_i2s (
-        .clk_74a    (clk_74a),
+    audio_mixer #(.DW(16), .STEREO(1)) audio_mixer (
+        .clk_74b    (clk_74b),
         .clk_audio  (clk_chipset),
-        .audio_l    (audio_l),
-        .audio_r    (audio_r),
+        .reset      (1'b0),
+        .vol_att    (4'd0),
+        .mix        (stereo_mix_cfg),
+        .is_signed  (1'b1),
+        .core_l     (audio_l),
+        .core_r     (audio_r),
         .audio_mclk (audio_mclk),
         .audio_lrck (audio_lrck),
         .audio_dac  (audio_dac)

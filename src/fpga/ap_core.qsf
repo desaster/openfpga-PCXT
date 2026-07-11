@@ -758,16 +758,26 @@ set_global_assignment -name VERILOG_MACRO "ENABLE_A000_UMB=1"
 # Analogue Pocket platform: APF bridge, scaler I/O, DDIO buffers.
 set_global_assignment -name QIP_FILE apf/apf.qip
 
-# Pocket core wrapper and ported infrastructure (openFPGA template, MIT).
+# Pocket core wrapper and ported infrastructure (openFPGA template).
 set_global_assignment -name SYSTEMVERILOG_FILE core/core_top.sv
 set_global_assignment -name VERILOG_FILE core/core_bridge_cmd.v
 set_global_assignment -name SYSTEMVERILOG_FILE core/data_loader.sv
-set_global_assignment -name SYSTEMVERILOG_FILE core/sound_i2s.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/sync_fifo.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/hid_to_ps2.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pocket_keyboard.sv
 
-# Disk-service softcore: a PicoRV32 CPU (ISC) with a firmware ROM. Runs the
+# Audio back end: OpenGateware audio_mixer (MiSTer filter chain + I2S) and its
+# codec-clock PLL.
+set_global_assignment -name SYSTEMVERILOG_FILE core/audio/audio_mixer.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/audio/sound_i2s.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/audio/filters/audio_filters.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/audio/filters/audio_mix.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/audio/filters/dc_blocker.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/audio/filters/iir_filter.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/audio/filters/iir_filter_tap.sv
+set_global_assignment -name VERILOG_FILE core/mf_audio_pll.v
+
+# Disk-service softcore: a PicoRV32 CPU with a firmware ROM. Runs the
 # service loop that pulls floppy sectors from an APF dataslot into floppy.v.
 set_global_assignment -name VERILOG_FILE core/picorv32.v
 set_global_assignment -name VERILOG_FILE core/sprom.v
@@ -776,8 +786,8 @@ set_global_assignment -name SYSTEMVERILOG_FILE core/softcpu_fdd_bridge.sv
 # core_constraints.sdc is pulled in by apf_constraints.sdc via read_sdc
 # (after derive_pll_clocks); do not add it as an SDC_FILE here too.
 
-# Core clocking: system PLL (50/100 MHz + SDRAM clock) and the two video PLLs
-# (CGA and Hercules pixel domains).
+# Core clocking: the system PLL and the two video PLLs (CGA and Hercules pixel
+# domains).
 set_global_assignment -name VERILOG_FILE core/pll.v
 set_global_assignment -name VERILOG_FILE core/pll_video.v
 set_global_assignment -name VERILOG_FILE core/pll_video_hgc.v
