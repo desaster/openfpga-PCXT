@@ -110,9 +110,9 @@ static setting_t settings[SET_COUNT] = {
 // Compiled defaults, snapshotted at boot before the save is adopted, for Reset to Defaults.
 static uint8_t settings_default[SET_COUNT];
 
-// A menu row is a submenu link, an editable option, or an action; `arg` selects the target menu,
-// the setting id, or the action respectively.
-enum { IT_SUBMENU, IT_OPTION, IT_ACTION };
+// A menu row is a submenu link, an editable option, an action, or a blank grouping spacer; `arg`
+// selects the target menu, the setting id, or the action respectively (unused for a spacer).
+enum { IT_SUBMENU, IT_OPTION, IT_ACTION, IT_SPACER };
 
 typedef struct {
     const char *label;
@@ -127,11 +127,13 @@ static const item_t items_main[] = {
     { "System", IT_SUBMENU, MENU_SYSTEM },
     { "Audio & Video", IT_SUBMENU, MENU_AV },
     { "Hardware", IT_SUBMENU, MENU_HW },
+    { "", IT_SPACER, 0 },
     { "Show Credits", IT_ACTION, ACT_CREDITS },
 #if ENABLE_HGC
     { "Switch Video", IT_ACTION, ACT_SWITCH_VIDEO },
 #endif
     { "Reset to Defaults", IT_ACTION, ACT_DEFAULTS },
+    { "", IT_SPACER, 0 },
     { "Reset PC", IT_ACTION, ACT_RESET_PC },
 };
 
@@ -209,6 +211,9 @@ static void draw_row(int i)
     int y = (ROW_FIRST + i) * 8;
 
     osd_fill_rect(&panel, 8, y, (PANEL_COLS - 2) * 8, 8, OSD_KEYFACE);
+    if (it->type == IT_SPACER) {
+        return; // a blank row that visually groups the items around it
+    }
     if (i == cur_row) {
         osd_draw_char(&panel, COL_CURSOR * 8, y, G_MARKER, OSD_CURSOR);
     }
@@ -236,13 +241,17 @@ static void move_cursor(int dir)
 {
     int n = menus[cur_menu].count;
     int old = cur_row;
-    int nr = (int) cur_row + dir;
-    if (nr < 0) {
-        nr = n - 1;
-    }
-    if (nr >= n) {
-        nr = 0;
-    }
+    int nr = cur_row;
+    // Step over blank spacer rows so the cursor only ever lands on a real item.
+    do {
+        nr += dir;
+        if (nr < 0) {
+            nr = n - 1;
+        }
+        if (nr >= n) {
+            nr = 0;
+        }
+    } while (menus[cur_menu].items[nr].type == IT_SPACER);
     cur_row = (uint8_t) nr;
     draw_row(old);
     draw_row(cur_row);

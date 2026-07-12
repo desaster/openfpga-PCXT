@@ -161,15 +161,6 @@
         ]
       },
       {
-        "name": "Show Credits",
-        "id": 7,
-        "type": "action",
-        "enabled": true,
-        "writeonly": true,
-        "address": "0x78",
-        "value": 1
-      },
-      {
         "name": "Extra Options",
         "id": 2,
         "type": "action",

@@ -619,7 +619,6 @@ module core_top (
                 32'h0000_0090: gamepad_74a       <= bridge_wr_data[1:0];
                 32'h0000_0094: select_cfg_74a    <= bridge_wr_data[7:0];
                 32'h0000_0098: start_cfg_74a     <= bridge_wr_data[7:0];
-                32'h0000_0078: credits_active_74a <= 1'b1;         // Show Credits (start)
             endcase
         end
         if (osd_reset_req_74a)
