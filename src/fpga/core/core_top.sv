@@ -381,7 +381,7 @@ module core_top (
         scale_video_ff          <= scale;
         screen_mode_video_ff    <= screen_mode;
         border_video_ff         <= border;
-        cga_hw                  <= `ENABLE_CGA ? (~cga_gfx_cfg | tandy_video_mode) : 1'b0;
+        cga_hw                  <= `ENABLE_CGA ? (`ENABLE_HGC ? (~cga_gfx_cfg | tandy_video_mode) : 1'b1) : 1'b0;
         hercules_hw             <= `ENABLE_HGC ? (`ENABLE_CGA ? ~hgc_gfx_cfg : 1'b1) : 1'b0;
     end
 
@@ -486,7 +486,9 @@ module core_top (
 
     // Hercules video PLL: 32.514 MHz (HGC dot clock x2), 16.257 MHz pixel + 90-deg
     // sibling. Referenced from clk_74b: the clk_74a pin reaches only the two
-    // bottom-edge fractional-PLL sites, and pll / pll_video occupy those.
+    // bottom-edge fractional-PLL sites, and pll / pll_video occupy those. Absent
+    // the card, the tie-offs free the PLL site and fold the RESET lock term.
+    generate if (`ENABLE_HGC) begin : gen_pll_video_hgc
     pll_video_hgc pll_video_hgc
     (
         .refclk   (clk_74b),
@@ -496,6 +498,12 @@ module core_top (
         .outclk_2 (clk_pix_hgc_90),
         .locked   (pll_video_hgc_locked)
     );
+    end else begin : gen_pll_video_hgc
+    assign clk_32_514           = 1'b0;
+    assign clk_pix_hgc          = 1'b0;
+    assign clk_pix_hgc_90       = 1'b0;
+    assign pll_video_hgc_locked = 1'b1;
+    end endgenerate
 
     // The video back-end (palette tint -> credits -> OSD -> output regs and the
     // scaler's video_rgb_clock) runs on whichever pixel pair matches the displayed

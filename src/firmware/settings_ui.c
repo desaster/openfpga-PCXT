@@ -121,22 +121,27 @@ typedef struct {
 } item_t;
 
 enum { MENU_MAIN, MENU_SYSTEM, MENU_AV, MENU_HW, MENU_COUNT };
-enum { ACT_CREDITS, ACT_DEFAULTS, ACT_RESET_PC };
+enum { ACT_CREDITS, ACT_DEFAULTS, ACT_RESET_PC, ACT_SWITCH_VIDEO };
 
 static const item_t items_main[] = {
     { "System", IT_SUBMENU, MENU_SYSTEM },
     { "Audio & Video", IT_SUBMENU, MENU_AV },
     { "Hardware", IT_SUBMENU, MENU_HW },
     { "Show Credits", IT_ACTION, ACT_CREDITS },
+#if ENABLE_HGC
+    { "Switch Video", IT_ACTION, ACT_SWITCH_VIDEO },
+#endif
     { "Reset to Defaults", IT_ACTION, ACT_DEFAULTS },
     { "Reset PC", IT_ACTION, ACT_RESET_PC },
 };
 
 static const item_t items_system[] = {
     { "CPU Speed", IT_OPTION, SET_CPU_SPEED },
+#if ENABLE_HGC
     { "CGA Graphics", IT_OPTION, SET_CGA_GFX },
     { "Hercules Graphics", IT_OPTION, SET_HGC_GFX },
     { "1st Video", IT_OPTION, SET_VIDEO_1ST },
+#endif
     { "BIOS Writable", IT_OPTION, SET_BIOS_WR },
 };
 
@@ -319,6 +324,11 @@ int settings_input(uint16_t pressed)
             } else if (it->arg == ACT_CREDITS) {
                 settings_show_credits();
                 return 1; // close the panel so the credits scroll shows on a clean screen
+#if ENABLE_HGC
+            } else if (it->arg == ACT_SWITCH_VIDEO) {
+                *OSD_ACTION = 0;             // re-arm the edge
+                *OSD_ACTION = OSD_ACT_VIDEO; // rising edge -> toggle the displayed video card
+#endif
             }
         }
     }
@@ -368,7 +378,11 @@ void settings_load(void)
 
 int settings_video_1st(void)
 {
+#if ENABLE_HGC
     return settings[SET_VIDEO_1ST].value;
+#else
+    return 0;
+#endif
 }
 
 void settings_service(void)
