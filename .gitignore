@@ -43,4 +43,5 @@ c5_pin_model_dump.txt
 src/firmware/firmware.vh
 src/firmware/firmware.elf
 src/firmware/firmware.bin
+credits/msg2hex
 **/.DS_Store

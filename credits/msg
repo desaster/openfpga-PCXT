@@ -9,10 +9,13 @@
 
 \W                                             by \Gspark2k06 
 
-                      Aitor Gomez Garcia 
-                  https://ko-fi.com/spark2k06 
+                     PCXT/OpenFPGA * desaster 
+           https://github.com/desaster/openfpga-PCXT 
 
                           \BPOWERED BY 
+
+               PCXT/MiSTer * Aitor Gomez Garcia 
+                  https://ko-fi.com/spark2k06 
 
                      KFPC-XT * kitune-san 
                  https://github.com/kitune-san 
@@ -106,7 +109,7 @@ ______________________________________________________________
 ______________________________________________________________ 
 
                        \RReport issues to 
-        https://github.com/MiSTer-devel/PCXT_MiSTer/issues 
+        https://github.com/desaster/openfpga-PCXT/issues 
 
 
                        \BSome Known Issues 
@@ -115,7 +118,3 @@ ______________________________________________________________
 
        * More than the standard 16 colours of simulated 
            composite video are not displayed reliably. 
-
-   * Timing issues mean that the image may not display well on 
-      CRTs and some vertical line shifts to the right of the 
-        image, such as 640x400x4 and sometimes 320x200x16. 
