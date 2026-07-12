@@ -57,7 +57,7 @@ enum {
     SET_VIDEO_1ST,
     SET_CGA_GFX,
     SET_HGC_GFX,
-    SET_COUNT
+    SET_COUNT // new settings append above: the save blob stores values by index
 };
 
 static const char *const opt_cpu[] = { "4.77 MHz", "7.16 MHz", "9.54 MHz", "PC/AT 3.5 MHz" };

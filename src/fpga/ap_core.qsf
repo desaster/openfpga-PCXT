@@ -755,6 +755,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE core/data_loader.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/sync_fifo.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/hid_to_ps2.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pocket_keyboard.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/pocket_mouse.sv
 
 # Audio back end: OpenGateware audio_mixer (MiSTer filter chain + I2S) and its
 # codec-clock PLL.

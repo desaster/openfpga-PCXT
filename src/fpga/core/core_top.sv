@@ -308,11 +308,9 @@ module core_top (
     wire        kb_valid;
     wire        kb_ready;
 
-    //Mouse PS2
-    wire        ps2_mouse_clk_out;
-    wire        ps2_mouse_data_out;
-    wire        ps2_mouse_clk_in;
-    wire        ps2_mouse_data_in;
+    // Mouse: serial-mouse byte stream into CHIPSET's COM1
+    wire        mouse_rd;
+    wire        mouse_rts_n;
 
     wire        ioctl_download;
     wire  [7:0] ioctl_index;
@@ -327,10 +325,12 @@ module core_top (
     wire [15:0] joya0, joya1;
 
     // Controller-button config (interact menu), latched in clk_74a and synced into
-    // clk_chipset below. key_* = per-face-button Set-2 scancode; gamepad selects the
-    // game port over the keyboard.
+    // clk_chipset below. key_* = per-face-button Set-2 scancode; gamepad_mode selects
+    // what the pad drives: mapped keys, the game port, or the serial mouse.
     wire [7:0]  key_a, key_b, key_x, key_y;
-    wire        gamepad;
+    wire [1:0]  gamepad_mode;
+    wire        gamepad  = (gamepad_mode == 2'd1);
+    wire        mousepad = (gamepad_mode == 2'd2);
     // Button Select/Start config: 0xF1=Settings, 0xF2=Pause/Credits, 0xF3=CGA/HGC toggle,
     // other = Set-2 key. Split into an OSD function id for the softcore and a key scancode
     // (0 for the functions) for the keyboard.
@@ -394,10 +394,8 @@ module core_top (
     assign forced_scandoubler = 1'b0;
     assign buttons            = 2'b00;
 
-    // Keyboard driven by pocket_keyboard (instantiated below, near CHIPSET);
-    // it hands Set-2 bytes to CHIPSET over kb_byte/kb_valid/kb_ready. Mouse input idle.
-    assign ps2_mouse_clk_out  = 1'b1;   // CHIPSET mouse input, idle
-    assign ps2_mouse_data_out = 1'b1;
+    // Keyboard driven by pocket_keyboard, mouse by pocket_mouse (both
+    // instantiated below, near CHIPSET).
     // Pocket controllers -> game-port inputs. Digital bits: [5]=fire2 [4]=fire1 [3]=up [2]=down
     // [1]=left [0]=right, from cont key bits [0]=up [1]=down [2]=left [3]=right [4]=A [5]=B.
     wire [13:0] cont1_dig = {8'd0, cont1_key_chip[5], cont1_key_chip[4],
@@ -571,7 +569,7 @@ module core_top (
     reg  [7:0] key_b_74a         = 8'h11;  // B default: L-Alt
     reg  [7:0] key_x_74a         = 8'h29;  // X default: Space
     reg  [7:0] key_y_74a         = 8'h5A;  // Y default: Enter
-    reg        gamepad_74a       = 1'b0;   // 0 = keyboard, 1 = joystick (game port)
+    reg  [1:0] gamepad_74a       = 2'd0;   // 0 = keyboard, 1 = joystick (game port), 2 = mouse
     reg  [7:0] select_cfg_74a    = 8'hF1;  // Button Select: 0xF1 = Settings (default)
     reg  [7:0] start_cfg_74a     = 8'hF2;  // Button Start: 0xF2 = Pause/Credits (default)
     reg        credits_active_74a = 1'b0;  // credits showing: set by the menu action, cleared by any button
@@ -618,7 +616,7 @@ module core_top (
                 32'h0000_0084: key_b_74a         <= bridge_wr_data[7:0];
                 32'h0000_0088: key_x_74a         <= bridge_wr_data[7:0];
                 32'h0000_008C: key_y_74a         <= bridge_wr_data[7:0];
-                32'h0000_0090: gamepad_74a       <= bridge_wr_data[0];
+                32'h0000_0090: gamepad_74a       <= bridge_wr_data[1:0];
                 32'h0000_0094: select_cfg_74a    <= bridge_wr_data[7:0];
                 32'h0000_0098: start_cfg_74a     <= bridge_wr_data[7:0];
                 32'h0000_0078: credits_active_74a <= 1'b1;         // Show Credits (start)
@@ -676,7 +674,7 @@ module core_top (
     synch_3 #(.WIDTH(8)) s_key_b          (key_b_74a,         key_b,         clk_chipset);
     synch_3 #(.WIDTH(8)) s_key_x          (key_x_74a,         key_x,         clk_chipset);
     synch_3 #(.WIDTH(8)) s_key_y          (key_y_74a,         key_y,         clk_chipset);
-    synch_3               s_gamepad       (gamepad_74a,       gamepad,       clk_chipset);
+    synch_3 #(.WIDTH(2))  s_gamepad       (gamepad_74a,       gamepad_mode,  clk_chipset);
     synch_3 #(.WIDTH(8))  s_select_cfg    (select_cfg_74a,    select_cfg,    clk_chipset);
     synch_3 #(.WIDTH(8))  s_start_cfg     (start_cfg_74a,     start_cfg,     clk_chipset);
     synch_3 #(.WIDTH(16)) s_cont1_chip    (cont1_key_s,       cont1_key_chip, clk_chipset);
@@ -1626,10 +1624,13 @@ module core_top (
     // one Set-2 byte stream handed to CHIPSET's KFPS2KB over kb_byte/kb_valid,
     // paced by kb_ready.
     //
+    // Mouse mode consumes the D-pad and A/B; X/Y and Select/Start stay mapped keys.
+    wire [15:0] kb_buttons = mousepad ? (cont1_key_s & 16'hFFC0) : cont1_key_s;
+
     pocket_keyboard u_pocket_keyboard (
         .clk          (clk_chipset),
         .reset        (reset),
-        .buttons      (cont1_key_s),
+        .buttons      (kb_buttons),
         .gamepad      (gamepad),
         .osd_active   (osd_active | credits_mode_chip),
         .vkb_key      (vkb_key),
@@ -1646,6 +1647,24 @@ module core_top (
         .kb_byte      (kb_byte),
         .kb_valid     (kb_valid),
         .kb_ready     (kb_ready)
+    );
+
+    //
+    // Mouse: docked USB mouse (cont4_*) -> Microsoft serial mouse byte stream
+    // on CHIPSET's COM1, identification paced by its RTS. In mouse mode the
+    // pad's D-pad and A/B drive it too, quiet while an overlay is up.
+    //
+    wire [5:0] mouse_pad = (mousepad && !(osd_active | credits_mode_chip)) ?
+                           cont1_key_s[5:0] : 6'd0;
+
+    pocket_mouse u_pocket_mouse (
+        .clk          (clk_chipset),
+        .cont4_joy    (cont4_joy),
+        .cont4_key    (cont4_key),
+        .cont4_trig   (cont4_trig),
+        .pad          (mouse_pad),
+        .rts_n        (mouse_rts_n),
+        .rd           (mouse_rd)
     );
 
     CHIPSET #(.clk_rate(cur_rate)) u_CHIPSET
@@ -1718,10 +1737,8 @@ module core_top (
 		.kb_byte                            (kb_byte),
 		.kb_valid                           (kb_valid),
 		.kb_ready                           (kb_ready),
-		.ps2_mouseclk_in                    (ps2_mouse_clk_out),
-		.ps2_mousedat_in                    (ps2_mouse_data_out),
-		.ps2_mouseclk_out                   (ps2_mouse_clk_in),
-		.ps2_mousedat_out                   (ps2_mouse_data_in),
+		.uart_rx                            (mouse_rd),
+		.uart_rts_n                         (mouse_rts_n),
 		.joy_opts                           (joy_opts),           //Joy0-Disabled, Joy0-Type, Joy1-Disabled, Joy1-Type, turbo_sync
 		.joy0                               (swapjoy_cfg ? joy1 : joy0),
 		.joy1                               (swapjoy_cfg ? joy0 : joy1),
@@ -1947,8 +1964,9 @@ module core_top (
     //
     ////////////////////////////  UART  ///////////////////////////////////
     //
-    // COM1 lives inside CHIPSET; its clock enable is generated here. The UART inputs are
-    // tied to the idle/marking level (no external serial wiring on the Pocket).
+    // COM1 (serial mouse) and COM2 live inside CHIPSET; their clock enable is generated
+    // here. COM2's inputs are tied to the idle/marking level (no external serial wiring
+    // on the Pocket).
 
     logic clk_uart_ff_1;
     logic clk_uart_ff_2;
@@ -1987,7 +2005,7 @@ module core_top (
         end
     end
 
-    wire uart_tx, uart_rts, uart_dtr;   // CHIPSET COM1 outputs, no external pins
+    wire uart_tx, uart_rts, uart_dtr;   // CHIPSET COM2 outputs, no external pins
     wire uart_rx  = 1'b1;
     wire uart_cts = 1'b1;
     wire uart_dsr = 1'b1;

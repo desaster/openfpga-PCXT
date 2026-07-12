@@ -93,10 +93,8 @@ module PERIPHERALS #(
         input   logic   [7:0]   kb_byte,
         input   logic           kb_valid,
         output  logic           kb_ready,
-        input   logic           ps2_mouseclk_in,
-        input   logic           ps2_mousedat_in,
-        output  logic           ps2_mouseclk_out,
-        output  logic           ps2_mousedat_out,
+        input   logic           uart_rx,
+        output  logic           uart_rts_n,
         input   logic   [4:0]   joy_opts,
         input   logic   [13:0]  joy0,
         input   logic   [13:0]  joy1,
@@ -829,9 +827,7 @@ end
     end
 
     wire iorq_uart = (io_write_n & ~prev_io_write_n) || (~io_read_n  & prev_io_read_n);
-    wire uart_tx;
-    wire rts_n;
-	 
+
     uart uart1
     (
         .clk               (clock),
@@ -844,12 +840,12 @@ end
         .write             (io_write_n & ~prev_io_write_n),
         .readdata          (uart_readdata_1),
         .cs                (uart_chip_select & iorq_uart),
-        .rx                (uart_tx),
+        .rx                (uart_rx),
         .cts_n             (0),
         .dcd_n             (0),
         .dsr_n             (0),
         .ri_n              (1),
-        .rts_n             (rts_n),
+        .rts_n             (uart_rts_n),
         .irq               (uart_irq)
     );
 	 
@@ -877,17 +873,6 @@ end
         .ri_n              (1),
 
         .irq               (uart2_irq)
-    );
-	 
-    MSMouseWrapper MSMouseWrapper_inst 
-    (
-        .clk(clock),
-        .ps2dta_in(ps2_mousedat_in),
-        .ps2clk_in(ps2_mouseclk_in),
-        .ps2dta_out(ps2_mousedat_out),
-        .ps2clk_out(ps2_mouseclk_out),
-        .rts(~rts_n),
-        .rd(uart_tx)
     );
 
     // Timing of the readings may need to be reviewed.

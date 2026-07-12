@@ -29,7 +29,8 @@
         "defaultval": 0,
         "options": [
           { "value": 0, "name": "Keyboard" },
-          { "value": 1, "name": "Joystick" }
+          { "value": 1, "name": "Joystick" },
+          { "value": 2, "name": "Mouse" }
         ]
       },
       {
