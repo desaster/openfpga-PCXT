@@ -34,6 +34,11 @@ module softcpu_subsystem (
     input [31:0] hdd0_disk_size,
     input [31:0] hdd1_disk_size,
 
+    // Per-floppy-drive image-rebind toggle: flips on every dataslot update so the
+    // firmware re-mounts a swapped image even at an unchanged size.
+    input        fdd0_rebind,
+    input        fdd1_rebind,
+
     // Management-bus master to floppy.v via CHIPSET
     output [15:0] mgmt_addr,
     output [15:0] mgmt_dout,
@@ -687,6 +692,8 @@ module softcpu_subsystem (
         .fdd1_disk_size(fdd1_disk_size),
         .hdd0_disk_size(hdd0_disk_size),
         .hdd1_disk_size(hdd1_disk_size),
+        .fdd0_rebind(fdd0_rebind),
+        .fdd1_rebind(fdd1_rebind),
 
         .mgmt_addr  (mgmt_addr),
         .mgmt_dout  (mgmt_dout),

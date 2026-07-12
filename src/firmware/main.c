@@ -1,10 +1,6 @@
-// Disk-service firmware entry point.
-//
-// Mount each disk image the first time the host reports a non-zero size, then service
-// controller requests forever. Every image is optional and may be picked from the
-// menu after boot (deferload), so nothing is waited for up front: a machine can boot
-// from a floppy, from the hard disk, or from either once its image appears. The heavy
-// lifting lives in fdd_service.c and ide_service.c; this is just the top-level loop.
+// Softcore firmware entry point: bring up the peripherals, then loop servicing disk
+// requests and settings while the timer interrupt draws the OSD. The disk and OSD work
+// lives in fdd_service.c, ide_service.c, and the vkb/settings units.
 
 #include "settings_ui.h"
 #include "softcpu_regs.h"
@@ -47,26 +43,33 @@ int main(void)
     timer_start(TIMER_PERIOD);
     irq_mask(0xFFFFFFFEu);
 
+    // Images are deferload (optional, menu-picked at will), so mount lazily on a drive's
+    // first non-zero size, and for a floppy again on each rebind-toggle flip: fdd_mount's
+    // eject/insert re-arms floppy.v's media-change line, the only signal a same-size swap
+    // gives (hard disks reload the core, so they mount once).
     uint32_t mounted_a = 0;
     uint32_t mounted_b = 0;
     uint32_t mounted_hdd = 0;
     uint32_t mounted_hdd_b = 0;
+    uint32_t rebind_seen = *FDD_REBIND; // last-seen rebind toggles
 
     for (;;) {
-        if (!mounted_a) {
+        uint32_t rebind = *FDD_REBIND;
+        if (!mounted_a || ((rebind ^ rebind_seen) & FDD0_REBIND_BIT)) {
             uint32_t sectors = stable_size(FDD0_DISK_SIZE);
             if (sectors != 0) {
                 fdd_mount(0, sectors);
                 mounted_a = 1;
             }
         }
-        if (!mounted_b) {
+        if (!mounted_b || ((rebind ^ rebind_seen) & FDD1_REBIND_BIT)) {
             uint32_t sectors = stable_size(FDD1_DISK_SIZE);
             if (sectors != 0) {
                 fdd_mount(1, sectors);
                 mounted_b = 1;
             }
         }
+        rebind_seen = rebind;
         if (!mounted_hdd) {
             uint32_t sectors = stable_size(HDD0_DISK_SIZE);
             if (sectors != 0) {

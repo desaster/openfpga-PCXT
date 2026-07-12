@@ -57,6 +57,10 @@ module softcpu_fdd_bridge #(
     input  wire [31:0] hdd0_disk_size,
     input  wire [31:0] hdd1_disk_size,
 
+    // Per-floppy-drive image-rebind toggle (flips on every dataslot update), clk_sys
+    input  wire        fdd0_rebind,
+    input  wire        fdd1_rebind,
+
     // Management-bus master to floppy.v via CHIPSET, clk_sys
     output wire [15:0] mgmt_addr,
     output wire [15:0] mgmt_dout,
@@ -270,6 +274,7 @@ module softcpu_fdd_bridge #(
                 8'h44:   cpu_rdata = {29'd0, ide0_request};
                 8'h48:   cpu_rdata = hdd0_disk_size;
                 8'h4C:   cpu_rdata = hdd1_disk_size;
+                8'h50:   cpu_rdata = {30'd0, fdd1_rebind, fdd0_rebind};
                 default: cpu_rdata = 32'd0;
             endcase
         end

@@ -857,6 +857,24 @@ module core_top (
             fdd1_slot_bytes_74a <= dataslot_update_size;
     end
 
+    // A floppy image (re)binds by a dataslot update, which fires even when the new image
+    // is the same size as the old one. Toggle a per-drive bit on each bind so the firmware
+    // re-runs the mount, whose eject-then-insert makes floppy.v re-assert its media-change
+    // line; a same-size swap otherwise leaves the guest reading the directory it cached
+    // from the previous disk. dataslot_update is held for several clk_74a cycles per
+    // command, so flip on its rising edge only: a level toggle would flip an even number
+    // of times across the pulse and cancel.
+    reg        fdd0_rebind_74a   = 1'b0;
+    reg        fdd1_rebind_74a   = 1'b0;
+    reg        dataslot_update_d = 1'b0;
+    always @(posedge clk_74a) begin
+        dataslot_update_d <= dataslot_update;
+        if (dataslot_update && !dataslot_update_d) begin
+            if (dataslot_update_id == 16'd3) fdd0_rebind_74a <= ~fdd0_rebind_74a;
+            if (dataslot_update_id == 16'd4) fdd1_rebind_74a <= ~fdd1_rebind_74a;
+        end
+    end
+
     wire [31:0] fdd0_slot_bytes;
     wire [31:0] fdd1_slot_bytes;
     wire [31:0] hdd0_slot_bytes;
@@ -885,6 +903,19 @@ module core_top (
     wire [31:0] fdd1_disk_sectors = fdd1_slot_bytes >> 9;   // bytes / 512
     wire [31:0] hdd0_disk_sectors = hdd0_slot_bytes >> 9;   // bytes / 512
     wire [31:0] hdd1_disk_sectors = hdd1_slot_bytes >> 9;   // bytes / 512
+
+    wire fdd0_rebind;
+    wire fdd1_rebind;
+    synch_3 s_fdd0_rebind (
+        .i   (fdd0_rebind_74a),
+        .o   (fdd0_rebind),
+        .clk (clk_chipset)
+    );
+    synch_3 s_fdd1_rebind (
+        .i   (fdd1_rebind_74a),
+        .o   (fdd1_rebind),
+        .clk (clk_chipset)
+    );
 
     // OSD overlay interconnect: the raster counters (driven in the video output
     // stage) locate the framebuffer readout; the softcore returns a 4bpp palette
@@ -939,6 +970,8 @@ module core_top (
         .fdd1_disk_size             (fdd1_disk_sectors),
         .hdd0_disk_size             (hdd0_disk_sectors),
         .hdd1_disk_size             (hdd1_disk_sectors),
+        .fdd0_rebind                (fdd0_rebind),
+        .fdd1_rebind                (fdd1_rebind),
 
         .mgmt_addr                  (mgmt_addr),
         .mgmt_dout                  (mgmt_dout),

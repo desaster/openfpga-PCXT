@@ -24,6 +24,7 @@
 #define IDE_REQUEST    ((volatile uint32_t *) 0x30000044) // R: ide0 request [2:0]
 #define HDD0_DISK_SIZE ((volatile uint32_t *) 0x30000048) // R: hard-disk-0 image size in sectors
 #define HDD1_DISK_SIZE ((volatile uint32_t *) 0x3000004C) // R: hard-disk-1 image size in sectors
+#define FDD_REBIND     ((volatile uint32_t *) 0x30000050) // R: per-floppy image-rebind toggles
 
 // OSD GPU command registers (softcpu_subsystem), mapped in the 0x4 region. Set XY (and WH for
 // FILL/OUTLINE) then write the op; poll STATUS between commands.
@@ -90,6 +91,10 @@
 // FDD_REQUEST bits
 #define FDD_REQ_READ  (1 << 0)
 #define FDD_REQ_WRITE (1 << 1)
+
+// FDD_REBIND bits: one toggle per floppy drive, flipping on each image (re)bind.
+#define FDD0_REBIND_BIT (1 << 0)
+#define FDD1_REBIND_BIT (1 << 1)
 
 // FDD_MGMT_TRIG bits
 #define FDD_MGMT_WR (1 << 0)
