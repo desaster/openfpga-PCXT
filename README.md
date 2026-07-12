@@ -4,6 +4,8 @@ This is a PC/XT core for Analogue Pocket, faithfully ported from the MiSTer core
 
 This port was done with heavy use of AI agents. The success of this project is thanks to the hard work of the authors of the cores this port was based on, such as [@spark2k06](https://github.com/spark2k06/), [@MicroCoreLabs](https://github.com/MicroCoreLabs/) and [@kitune-san](https://github.com/kitune-san) and more (see [Credits](#credits)).
 
+![pcxt_showcase](https://github.com/user-attachments/assets/7ef77479-f2d1-44fa-aed8-94f977082d23)
+
 ## Key features
 
 * 8088 CPU with these speed settings: 4.77 MHz, 7.16 MHz, 9.54 MHz cycle accurate, and PC/AT 286 at 3.5MHz equivalent (max. speed)
