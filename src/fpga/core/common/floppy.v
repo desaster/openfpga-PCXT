@@ -602,7 +602,9 @@ always @(posedge clk) begin
 	else if(state == S_SD_FORMAT_WAIT_FOR_FILL && &format_counter && fifo_read) format_sector_count <= format_sector_count - 8'd1;
 end
 
-wire cmd_format_in_input_finish = ~execute_ndma && dma_has_terminated;
+// Terminal count can land on the last sector's final byte; excluding that just-completed
+// sector (format_data_count == 4) lets it format instead of ending the command early.
+wire cmd_format_in_input_finish = ~execute_ndma && dma_has_terminated && format_data_count != 3'd4;
 
 wire cmd_format_finish = cmd_format_in_progress && (
 	cmd_format_in_input_finish ||
