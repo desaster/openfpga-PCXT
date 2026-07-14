@@ -319,8 +319,6 @@ module core_top (
     wire [15:0] ioctl_data;
     reg         ioctl_wait;
 
-    wire [21:0] gamma_bus;
-
     wire [13:0] joy0, joy1;
     wire [15:0] joya0, joya1;
 
@@ -355,17 +353,12 @@ module core_top (
     wire cga_gfx_cfg, hgc_gfx_cfg;   // CGA/Hercules Graphics I/O enables (settings bank; 0 = Yes)
     wire composite = composite_cfg | xtctl[0];
     wire [1:0] scale = status[2:1];
-    wire [2:0] screen_mode = status[16:14];
-    wire [1:0] ar = status[9:8];
-    wire border = status[29] | xtctl[1];
     wire a000h = `ENABLE_A000_UMB ? (a000_en_cfg & ~xtctl[6]) : 1'b0;
     wire [2:0] vsync_width_osd = status[56:54];  // 0=Auto (use register), 1-7=override
     wire [2:0] hsync_width_osd = status[59:57];  // 0=Auto, 1-7=fixed width (Nx16 pixel clocks)
 
     reg [1:0]   scale_video_ff;
     reg         hgc_mode_video_ff;
-    reg [2:0]   screen_mode_video_ff;
-    reg         border_video_ff;
     reg         cga_hw;
     wire        video_scandoubler_en = (scale_video_ff > 0) || forced_scandoubler;
     wire        cga_scandouble_en = video_scandoubler_en;
@@ -379,8 +372,6 @@ module core_top (
     always @(posedge clk_chipset)
     begin
         scale_video_ff          <= scale;
-        screen_mode_video_ff    <= screen_mode;
-        border_video_ff         <= border;
         cga_hw                  <= `ENABLE_CGA ? (`ENABLE_HGC ? (~cga_gfx_cfg | tandy_video_mode) : 1'b1) : 1'b0;
         hercules_hw             <= `ENABLE_HGC ? (`ENABLE_CGA ? ~hgc_gfx_cfg : 1'b1) : 1'b0;
     end
@@ -689,7 +680,6 @@ module core_top (
 
     wire reset_wire = RESET | status[0] | load_active | ~bios_ever_loaded | interact_reset
                     | splashscreen_sync2 | splash_reset_hold | splash_pending_sync2;
-    wire video_retime_reset = RESET;
     wire reset_sdram_wire = RESET;
 
     //
