@@ -15,19 +15,19 @@
 # PLL's clocks are selected, so each card's path into it is timed within its own
 # group and the cross pair is cut.
 #
-# PicoRV32 softcore clock: clk_chipset (50 MHz) gated to a one-in-six pulse, about
-# 8.3 MHz. It is generated in softcpu_subsystem.sv and used as a local clock, so it
-# needs its own clock definition. It is cut from the other domains below; the
-# crossings to clk_chipset are safe by construction, since clk_pico registers hold
-# stable for a full period.
-create_clock -name clk_pico -period 120.000 \
+# PicoRV32 softcore clock: clk_chipset gated to one pulse in six (~8.3 MHz), from
+# softcpu_subsystem.sv. A generated clock of clk_chipset, kept in its group so the
+# clk_pico <-> clk_chipset crossings are timed rather than cut.
+create_generated_clock -name clk_pico -divide_by 6 \
+ -source [get_pins {ic|pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}] \
  [get_nets {core_top:ic|softcpu_subsystem:u_softcpu|clk_pico}]
 
 set_clock_groups -asynchronous \
  -group { \
    ic|pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk \
    ic|pll|altera_pll_i|general[1].gpll~PLL_OUTPUT_COUNTER|divclk \
-   ic|pll|altera_pll_i|general[2].gpll~PLL_OUTPUT_COUNTER|divclk } \
+   ic|pll|altera_pll_i|general[2].gpll~PLL_OUTPUT_COUNTER|divclk \
+   clk_pico } \
  -group { \
    ic|pll_video|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk \
    ic|pll_video|altera_pll_i|general[1].gpll~PLL_OUTPUT_COUNTER|divclk \
@@ -41,5 +41,13 @@ set_clock_groups -asynchronous \
    ic|audio_mixer|audio_pll|altera_pll_i|general[1].gpll~PLL_OUTPUT_COUNTER|divclk } \
  -group { clk_74a } \
  -group { clk_74b } \
- -group { bridge_spiclk } \
- -group { clk_pico }
+ -group { bridge_spiclk }
+
+# clk_pico holds each value six clk_chipset cycles, so the clk_pico -> clk_chipset crossing
+# has a six-cycle window (the reverse captures on clk_pico, so one cycle already suffices).
+set_multicycle_path -setup -end 6 \
+ -from [get_clocks clk_pico] \
+ -to   [get_clocks {ic|pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}]
+set_multicycle_path -hold -end 5 \
+ -from [get_clocks clk_pico] \
+ -to   [get_clocks {ic|pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}]
