@@ -117,9 +117,10 @@ module pocket_keyboard (
     reg  usb_stb_d;
     reg  vkb_stb_d;
     wire btn_change = (btn_s[btn_idx] != btn_prev[btn_idx]);
-    // Single mailbox: if hid_to_ps2 emits two events on consecutive cycles (e.g. two
-    // modifiers) while the writer is busy, the first is overwritten. Rare; a modifier
-    // break lost this way self-corrects on the next press.
+    // One mailbox per source, signalled by a toggle: if hid_to_ps2 emits on two
+    // consecutive cycles while the queue is full, both are missed (the toggle nets out).
+    // USB is serviced first below, being the only source that cannot wait; buttons
+    // rescan and the VKB is firmware-paced.
     wire usb_pend   = (usb_key[10] != usb_stb_d);
     wire vkb_pend   = (vkb_stb != vkb_stb_d);
 
@@ -134,20 +135,20 @@ module pocket_keyboard (
             btn_mask <= osd_active ? btn_gated : (btn_mask & btn_gated);
 
             if (!q_full) begin
-                if (btn_change) begin
+                if (usb_pend) begin                     // docked USB keyboard: cannot wait
+                    queue[q_wr] <= {usb_key[8], usb_key[9], usb_key[7:0]};
+                    q_wr        <= q_wr + 1'b1;
+                    usb_stb_d   <= usb_key[10];
+                end else if (vkb_pend) begin            // Source C: on-screen keyboard
+                    queue[q_wr] <= {1'b0, vkb_key};
+                    q_wr        <= q_wr + 1'b1;
+                    vkb_stb_d   <= vkb_stb;
+                end else if (btn_change) begin
                     if (cur_code != 8'h00) begin        // 0 = unmapped: consume, emit nothing
                         queue[q_wr] <= {1'b0, btn_s[btn_idx], cur_code};
                         q_wr        <= q_wr + 1'b1;
                     end
                     btn_prev[btn_idx] <= btn_s[btn_idx];
-                end else if (vkb_pend) begin            // Source C: on-screen keyboard
-                    queue[q_wr] <= {1'b0, vkb_key};
-                    q_wr        <= q_wr + 1'b1;
-                    vkb_stb_d   <= vkb_stb;
-                end else if (usb_pend) begin
-                    queue[q_wr] <= {usb_key[8], usb_key[9], usb_key[7:0]};
-                    q_wr        <= q_wr + 1'b1;
-                    usb_stb_d   <= usb_key[10];
                 end else begin
                     btn_idx <= (btn_idx == 4'd9) ? 4'd0 : btn_idx + 4'd1;   // advance scan 0..9
                 end
