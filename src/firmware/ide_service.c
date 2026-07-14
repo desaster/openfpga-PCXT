@@ -249,6 +249,17 @@ static uint32_t ide_block_count(uint32_t remaining, int multi)
     return cnt ? cnt : 1;
 }
 
+// Reject a transfer addressed past the image: the dataslot offset is lba * 512 in 32
+// bits, so an out-of-range LBA would wrap and silently hit the wrong sector.
+static int ide_range_ok(uint32_t lba, uint32_t remaining)
+{
+    if (lba >= dsel->total || remaining > dsel->total - lba) {
+        ide_abort();
+        return 0;
+    }
+    return 1;
+}
+
 // READ SECTOR(S) / READ MULTIPLE: transfer sectors until the count is exhausted. In
 // single mode one sector is a data phase; in multiple mode up to the drive's block size
 // sectors are streamed into ide.v's buffer and delivered as one phase (io_size = the
@@ -259,6 +270,10 @@ static void ide_process_read(int multi)
     uint32_t lba = ide_get_lba();
     uint32_t remaining = R.sector_count ? R.sector_count : 256;
     uint32_t slot = hdd_slot(R.drv);
+
+    if (!ide_range_ok(lba, remaining)) {
+        return;
+    }
 
     while (1) {
         uint32_t cnt = ide_block_count(remaining, multi);
@@ -317,6 +332,10 @@ static void ide_process_write(int multi)
     uint32_t remaining = R.sector_count ? R.sector_count : 256;
     uint32_t slot = hdd_slot(R.drv);
     uint32_t irq = 0;
+
+    if (!ide_range_ok(lba, remaining)) {
+        return;
+    }
 
     while (1) {
         uint32_t cnt = ide_block_count(remaining, multi);
