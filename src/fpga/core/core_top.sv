@@ -728,7 +728,6 @@ module core_top (
     // Target-dataslot: the disk softcore initiates host reads of floppy images.
     wire        target_dataslot_read;
     wire        target_dataslot_write;
-    wire        target_dataslot_flush;
     wire [15:0] target_dataslot_id;
     wire [31:0] target_dataslot_slotoffset;
     wire [31:0] target_dataslot_bridgeaddr;
@@ -823,7 +822,6 @@ module core_top (
 
         .target_dataslot_read      (target_dataslot_read),
         .target_dataslot_write     (target_dataslot_write),
-        .target_dataslot_flush     (target_dataslot_flush),
         .target_dataslot_ack       (target_dataslot_ack),
         .target_dataslot_done      (target_dataslot_done),
         .target_dataslot_err       (target_dataslot_err),
@@ -985,7 +983,6 @@ module core_top (
 
         .target_dataslot_read       (target_dataslot_read),
         .target_dataslot_write      (target_dataslot_write),
-        .target_dataslot_flush      (target_dataslot_flush),
         .target_dataslot_id         (target_dataslot_id),
         .target_dataslot_slotoffset (target_dataslot_slotoffset),
         .target_dataslot_bridgeaddr (target_dataslot_bridgeaddr),
