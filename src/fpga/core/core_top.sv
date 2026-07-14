@@ -1687,7 +1687,7 @@ module core_top (
     // pad's D-pad and A/B drive it too, quiet while an overlay is up.
     //
     wire [5:0] mouse_pad = (mousepad && !(osd_active | credits_mode_chip)) ?
-                           cont1_key_s[5:0] : 6'd0;
+                           cont1_key_chip[5:0] : 6'd0;
 
     pocket_mouse u_pocket_mouse (
         .clk          (clk_chipset),
