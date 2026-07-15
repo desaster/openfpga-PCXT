@@ -463,9 +463,9 @@ module core_top (
     // Global power-on reset until all PLLs lock.
     wire RESET = ~pll_locked | ~pll_video_locked | ~pll_video_hgc_locked;
 
-    // Guest reset terms: PLL lock (RESET), host reset (status[0]), ROM load and the
-    // first-BIOS gate, interact/OSD Reset PC, and the splash holds. sdram holds on lock only.
-    wire reset_wire = RESET | status[0] | load_active | ~bios_ever_loaded | interact_reset
+    // Guest reset terms: PLL lock (RESET), ROM load and the first-BIOS gate,
+    // interact/OSD Reset PC, and the splash holds. sdram holds on lock only.
+    wire reset_wire = RESET | load_active | ~bios_ever_loaded | interact_reset
                     | splashscreen_sync2 | splash_reset_hold | splash_pending_sync2;
     wire reset_sdram_wire = RESET;
 
@@ -935,11 +935,7 @@ module core_top (
 
     wire forced_scandoubler;
     wire [1:0] buttons;
-    // Fixed Pocket defaults; user options come from osd_* and *_cfg, not here.
-    // Only the constant status[...] reads remain. Feature availability is set by the
-    // ENABLE_* macros (config.tcl), defaulted off by the `ifndef fallbacks above.
-    wire [63:0] status = 64'h0000_0000_0000_0080;
-    wire [7:0]  xtctl;
+    wire [7:0] xtctl;
 
     // Interact "Reset PC" (0x50): stretch the one-shot write to a level, sync to the
     // chipset clock, and fold into the guest reset so the machine re-POSTs.
@@ -1083,10 +1079,10 @@ module core_top (
     wire composite_cfg = osd_composite;   // CGA composite colour decode (settings bank, 0x7C)
     wire cga_gfx_cfg = osd_cga_gfx, hgc_gfx_cfg = osd_hgc_gfx;   // CGA/HGC graphics I/O enables (0 = Yes)
     wire composite = composite_cfg | xtctl[0];
-    wire [1:0] scale = status[2:1];
+    wire [1:0] scale = 2'd0;
     wire a000h = `ENABLE_A000_UMB ? (a000_en_cfg & ~xtctl[6]) : 1'b0;
-    wire [2:0] vsync_width_osd = status[56:54];  // 0=Auto (use register), 1-7=override
-    wire [2:0] hsync_width_osd = status[59:57];  // 0=Auto, 1-7=fixed width (Nx16 pixel clocks)
+    wire [2:0] vsync_width_osd = 3'd0;  // 0=Auto (use register), 1-7=override
+    wire [2:0] hsync_width_osd = 3'd0;  // 0=Auto, 1-7=fixed width (Nx16 pixel clocks)
 
     reg [1:0]   scale_video_ff;
     reg         hgc_mode_video_ff;
@@ -1507,10 +1503,6 @@ module core_top (
     reg splashscreen_sync1 = 0;
     reg splashscreen_sync2 = 0;
     reg splashscreen_sync_prev = 0;
-    reg status0_sync1 = 0;
-    reg status0_sync2 = 0;
-    reg status0_sync_prev = 0;
-    wire status0_clear_pulse = status0_sync2 & ~status0_sync_prev;
     reg splash_reset_hold = 0;
     reg [16:0] splash_reset_cnt = 17'd0;
     localparam [16:0] SPLASH_RESET_HOLD = 17'd131072;
@@ -1586,9 +1578,6 @@ module core_top (
         splashscreen_sync_prev <= splashscreen_sync2;
         splash_pending_sync1 <= splash_pending;
         splash_pending_sync2 <= splash_pending_sync1;
-        status0_sync1 <= status[0];
-        status0_sync2 <= status0_sync1;
-        status0_sync_prev <= status0_sync2;
 
         if (splashscreen_sync_prev && ~splashscreen_sync2)
         begin
@@ -1690,7 +1679,7 @@ module core_top (
         .processor_ready                    (processor_ready),
         .interrupt_to_cpu                   (interrupt_to_cpu),
         .splashscreen                       (splashscreen),
-        .status0_clear                      (status0_clear_pulse),
+        .status0_clear                      (1'b0),
         .std_hsyncwidth                     (std_hsyncwidth),
         .composite                          (composite),
         .video_output                       (video_output_sel),
@@ -1809,8 +1798,8 @@ module core_top (
         .cga_scandouble_en                  (cga_scandouble_en),
         .hercules_hw                        (hercules_hw_sel),
         .swap_video                         (swap_video),
-        .crt_h_offset                       (status[49:46]),
-        .crt_v_offset                       (status[52:50]),
+        .crt_h_offset                       (4'd0),
+        .crt_v_offset                       (3'd0),
         .vsync_width_osd                    (vsync_width_osd),
         .hsync_width_osd                    (hsync_width_osd),
         .ram_rw_complete                    (ram_rw_complete)
@@ -1906,7 +1895,7 @@ module core_top (
     wire [15:0] jtopl2_snd_e;
     wire [16:0] jtopl2_snd = {jtopl2_snd_e[15], jtopl2_snd_e};
     wire [10:0] tandy_snd_e;
-    wire [16:0] tandy_snd = `ENABLE_TANDY_AUDIO ? {{{2{tandy_snd_e[10]}}, {4{tandy_snd_e[10]}}, tandy_snd_e} << status[35:34], 2'b00} : 17'd0;
+    wire [16:0] tandy_snd = `ENABLE_TANDY_AUDIO ? {{{2{tandy_snd_e[10]}}, {4{tandy_snd_e[10]}}, tandy_snd_e}, 2'b00} : 17'd0;
     wire [16:0] spk_vol =  {2'b00, {3'b000,~speaker_out} << spk_vol_cfg, 11'd0};
     wire        speaker_out;
 
