@@ -933,7 +933,6 @@ module core_top (
 
     localparam tandy_video_mode = `ENABLE_TANDY_VIDEO;
 
-    wire forced_scandoubler;
     wire [1:0] buttons;
     wire [7:0] xtctl;
 
@@ -1079,21 +1078,16 @@ module core_top (
     wire composite_cfg = osd_composite;   // CGA composite colour decode (settings bank, 0x7C)
     wire cga_gfx_cfg = osd_cga_gfx, hgc_gfx_cfg = osd_hgc_gfx;   // CGA/HGC graphics I/O enables (0 = Yes)
     wire composite = composite_cfg | xtctl[0];
-    wire [1:0] scale = 2'd0;
     wire a000h = `ENABLE_A000_UMB ? (a000_en_cfg & ~xtctl[6]) : 1'b0;
     wire [2:0] vsync_width_osd = 3'd0;  // 0=Auto (use register), 1-7=override
     wire [2:0] hsync_width_osd = 3'd0;  // 0=Auto, 1-7=fixed width (Nx16 pixel clocks)
 
-    reg [1:0]   scale_video_ff;
     reg         hgc_mode_video_ff;
     reg         cga_hw;
-    wire        video_scandoubler_en = (scale_video_ff > 0) || forced_scandoubler;
-    wire        cga_scandouble_en = video_scandoubler_en;
     reg         hercules_hw;
 
     always @(posedge clk_chipset)
     begin
-        scale_video_ff          <= scale;
         cga_hw                  <= `ENABLE_CGA ? (`ENABLE_HGC ? (~cga_gfx_cfg | tandy_video_mode) : 1'b1) : 1'b0;
         hercules_hw             <= `ENABLE_HGC ? (`ENABLE_CGA ? ~hgc_gfx_cfg : 1'b1) : 1'b0;
     end
@@ -1101,11 +1095,8 @@ module core_top (
     always @(posedge clk_chipset)
         hgc_mode_video_ff       <= `ENABLE_HGC ? hgc_mode : 1'b0;
 
-    //
-    // Config + input stubs for the CHIPSET signals the Pocket doesn't drive.
-    //
-    assign forced_scandoubler = 1'b0;
-    assign buttons            = 2'b00;
+    // MiSTer front-panel buttons; the Pocket has none.
+    assign buttons = 2'b00;
 
     //
     // INPUT
@@ -1795,7 +1786,7 @@ module core_top (
         .ram_write_wait_cycle               (ram_write_wait_cycle),
         .pause_core                         (pause_core_chipset),
         .cga_hw                             (cga_hw),
-        .cga_scandouble_en                  (cga_scandouble_en),
+        .cga_scandouble_en                  (1'b0),
         .hercules_hw                        (hercules_hw_sel),
         .swap_video                         (swap_video),
         .crt_h_offset                       (4'd0),
