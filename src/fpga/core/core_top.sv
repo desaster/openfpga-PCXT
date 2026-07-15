@@ -16,6 +16,10 @@
 //
 //============================================================================
 
+    //
+    // FEATURE CONFIGURATION
+    //
+
 `ifndef SYSTEM_VARIANT_TANDY
 `define SYSTEM_VARIANT_TANDY 0
 `endif
@@ -55,7 +59,6 @@
 `ifndef ENABLE_EMS
 `define ENABLE_EMS 0
 `endif
-
 module core_top (
 
     //
@@ -197,8 +200,7 @@ module core_top (
 );
 
     //
-    // Unused Pocket physical interfaces, tied to safe states.
-    // (SDRAM/dram_*, video_*, audio_* are driven by the core below.)
+    // UNUSED PHYSICAL INTERFACES
     //
 
     // IR off, receiver disabled to save power
@@ -269,187 +271,33 @@ module core_top (
     assign aux_scl                 = 1'bZ;
     assign vpll_feed               = 1'bZ;
 
-    // Bridge reads: the command / data-table window (0xF8xxxxxx) reads back from
-    // core_bridge_cmd; the softcore bridge RAM (0x6xxxxxxx) reads back for dataslot
-    // writes; everything else returns 0.
     //
-    // The APF captures bridge_rd_data before it pulses bridge_rd, so the RAM read-back
-    // is registered on bridge_rd; read combinationally it would lead the address by
-    // one word. core_bridge_cmd already registers its own read. The capture is gated to
-    // the 0x6xxxxxxx window so a command-window read cannot overwrite the buffered word.
-    wire [31:0] cmd_bridge_rd_data;
-    wire [31:0] softcpu_bridge_rd_data;
-    reg  [31:0] softcpu_rd_data_buf;
-    always @(posedge clk_74a) begin
-        if (bridge_rd && bridge_addr[31:28] == 4'h6)
-            softcpu_rd_data_buf <= softcpu_bridge_rd_data;
-    end
-    always @(*) begin
-        casex (bridge_addr)
-            32'hF8xxxxxx: bridge_rd_data = cmd_bridge_rd_data;
-            32'h6xxxxxxx: bridge_rd_data = softcpu_rd_data_buf;
-            default:      bridge_rd_data = 32'd0;
-        endcase
-    end
-
-    wire forced_scandoubler;
-    wire [1:0] buttons;
-    // Config word: a constant of fixed Pocket defaults. The user-changeable options are not
-    // taken from here - they come from the settings bank (osd_*) and the interact regs (*_cfg)
-    // below and are consumed directly; only the fixed status[...] reads remain.
-    // NB: CGA/EMS/A000 UMB/OPL2 being "on" is contingent on the ENABLE_* macros in
-    // ap_core.qsf; the `ifndef fallbacks at the top of this file default them off.
-    // The qsf is the source of truth for the feature-enable set.
-    wire [63:0] status = 64'h0000_0000_0000_0080;
-    wire [7:0]  xtctl;
-
-    // Keyboard: parallel Set-2 byte handshake into CHIPSET
-    wire  [7:0] kb_byte;
-    wire        kb_valid;
-    wire        kb_ready;
-
-    // Mouse: serial-mouse byte stream into CHIPSET's COM1
-    wire        mouse_rd;
-    wire        mouse_rts_n;
-
-    wire        ioctl_download;
-    wire  [7:0] ioctl_index;
-    wire        ioctl_wr;
-    wire [24:0] ioctl_addr;
-    wire [15:0] ioctl_data;
-    reg         ioctl_wait;
-
-    wire [13:0] joy0, joy1;
-    wire [15:0] joya0, joya1;
-
-    // Controller-button config (interact menu), latched in clk_74a and synced into
-    // clk_chipset below. key_* = per-face-button Set-2 scancode; gamepad_mode selects
-    // what the pad drives: mapped keys, the game port, or the serial mouse.
-    wire [7:0]  key_a, key_b, key_x, key_y;
-    wire [1:0]  gamepad_mode;
-    wire        gamepad  = (gamepad_mode == 2'd1);
-    wire        mousepad = (gamepad_mode == 2'd2);
-    // Button Select/Start config: 0xF1=Settings, 0xF2=Pause/Credits, 0xF3=CGA/HGC toggle,
-    // other = Set-2 key. Split into an OSD function id for the softcore and a key scancode
-    // (0 for the functions) for the keyboard.
-    wire [7:0]  select_cfg, start_cfg;
-    wire [3:0]  select_fn  = (select_cfg == 8'hF1) ? 4'd1 : (select_cfg == 8'hF2) ? 4'd2 :
-                             (select_cfg == 8'hF3) ? 4'd3 : 4'd0;
-    wire [3:0]  start_fn   = (start_cfg  == 8'hF1) ? 4'd1 : (start_cfg  == 8'hF2) ? 4'd2 :
-                             (start_cfg  == 8'hF3) ? 4'd3 : 4'd0;
-    wire [7:0]  select_key = (select_cfg < 8'hF0) ? select_cfg : 8'h00;
-    wire [7:0]  start_key  = (start_cfg  < 8'hF0) ? start_cfg  : 8'h00;
-    wire [15:0] cont1_key_chip;
-    wire [15:0] cont2_key_chip;
-    wire [31:0] cont1_joy_chip, cont2_joy_chip;
-
-    // Game-port options from the settings OSD: [4]=Sync-to-CPU turbo timing, [3:2]=Joystick 2,
-    // [1:0]=Joystick 1; each 2-bit field is 0=Analog, 1=Digital, 2=Disabled.
-    wire [1:0]  joy1_cfg, joy2_cfg;
-    wire        swapjoy_cfg, syncjoy_cfg;
-    wire [4:0]  joy_opts = {syncjoy_cfg, joy2_cfg, joy1_cfg};
-
-    wire composite_cfg;   // CGA composite colour decode (settings bank, 0x7C)
-    wire cga_gfx_cfg, hgc_gfx_cfg;   // CGA/Hercules Graphics I/O enables (settings bank; 0 = Yes)
-    wire composite = composite_cfg | xtctl[0];
-    wire [1:0] scale = status[2:1];
-    wire a000h = `ENABLE_A000_UMB ? (a000_en_cfg & ~xtctl[6]) : 1'b0;
-    wire [2:0] vsync_width_osd = status[56:54];  // 0=Auto (use register), 1-7=override
-    wire [2:0] hsync_width_osd = status[59:57];  // 0=Auto, 1-7=fixed width (Nx16 pixel clocks)
-
-    reg [1:0]   scale_video_ff;
-    reg         hgc_mode_video_ff;
-    reg         cga_hw;
-    wire        video_scandoubler_en = (scale_video_ff > 0) || forced_scandoubler;
-    wire        cga_scandouble_en = video_scandoubler_en;
-    reg         hercules_hw;
-
-    wire VGA_VBlank_border;
-    wire std_hsyncwidth;
-    wire pause_core_chipset;
-    wire swap_video;
-
-    always @(posedge clk_chipset)
-    begin
-        scale_video_ff          <= scale;
-        cga_hw                  <= `ENABLE_CGA ? (`ENABLE_HGC ? (~cga_gfx_cfg | tandy_video_mode) : 1'b1) : 1'b0;
-        hercules_hw             <= `ENABLE_HGC ? (`ENABLE_CGA ? ~hgc_gfx_cfg : 1'b1) : 1'b0;
-    end
-
-    always @(posedge clk_chipset)
-        hgc_mode_video_ff       <= `ENABLE_HGC ? hgc_mode : 1'b0;
-
-    //
-    // Config + input stubs for the CHIPSET signals the Pocket doesn't drive.
-    //
-    assign forced_scandoubler = 1'b0;
-    assign buttons            = 2'b00;
-
-    // Keyboard driven by pocket_keyboard, mouse by pocket_mouse (both
-    // instantiated below, near CHIPSET).
-    // Pocket controllers -> game-port inputs. Digital bits: [5]=fire2 [4]=fire1 [3]=up [2]=down
-    // [1]=left [0]=right, from cont key bits [0]=up [1]=down [2]=left [3]=right [4]=A [5]=B.
-    wire [13:0] cont1_dig = {8'd0, cont1_key_chip[5], cont1_key_chip[4],
-                                   cont1_key_chip[0], cont1_key_chip[1],
-                                   cont1_key_chip[2], cont1_key_chip[3]};
-    wire [13:0] cont2_dig = {8'd0, cont2_key_chip[5], cont2_key_chip[4],
-                                   cont2_key_chip[0], cont2_key_chip[1],
-                                   cont2_key_chip[2], cont2_key_chip[3]};
-    // Left stick -> module analog. The Pocket sends unsigned axes centred on 0x80; the port wants
-    // signed centred on 0, so flip the top bit. An analog-less pad reports all-zero on every axis,
-    // which the guard passes through as centre (a raw 0 would otherwise convert to full deflection).
-    wire [15:0] cont1_ana = (cont1_joy_chip == 32'd0) ? 16'd0
-                          : {cont1_joy_chip[15:8] ^ 8'h80, cont1_joy_chip[7:0] ^ 8'h80};
-    wire [15:0] cont2_ana = (cont2_joy_chip == 32'd0) ? 16'd0
-                          : {cont2_joy_chip[15:8] ^ 8'h80, cont2_joy_chip[7:0] ^ 8'h80};
-    // Controller 1 reaches the port only in Gamepad Mode (else its buttons type keys); controller 2
-    // is always player 2. Both idle while an OSD panel is open, and a Disabled port sends nothing.
-    wire        p1_on = gamepad && !osd_active && (joy1_cfg != 2'd2);
-    wire        p2_on = !osd_active && (joy2_cfg != 2'd2);
-    assign joy0  = p1_on ? cont1_dig : 14'd0;
-    assign joy1  = p2_on ? cont2_dig : 14'd0;
-    assign joya0 = p1_on ? cont1_ana : 16'd0;
-    assign joya1 = p2_on ? cont2_ana : 16'd0;
-
-    // ROM load: data_loader + FIFO + copier drive ioctl_* in the ROM-LOAD
-    // section below; the reused BIOS FSM consumes them.
-
-    // Disk management bus, mastered by the disk softcore (u_softcpu, below).
-    wire [15:0] mgmt_din;              // CHIPSET readdata -> softcore
-    wire [15:0] mgmt_dout;             // softcore -> CHIPSET write data
-    wire [15:0] mgmt_addr;             // softcore -> CHIPSET address
-    wire        mgmt_rd;               // softcore -> CHIPSET read strobe
-    wire        mgmt_wr;               // softcore -> CHIPSET write strobe
-    wire  [7:0] mgmt_req;              // [7:6] fdd request, [2:0] ide0 (from CHIPSET)
-    assign mgmt_req[5:3] = 3'b000;
-
-    //
-    ///////////////////////   CLOCKS   /////////////////////////////
+    // CLOCKING
     //
 
-    wire pll_locked;
+    wire pll_locked;             // system PLL lock
 
-    wire clk_100;
-    wire clk_28_636;
-    wire clk_32_514;
-    reg clk_14_318 = 1'b0;
-    wire clk_cpu;
-    logic cpu_ce_posedge;
-    logic cpu_ce_negedge;
-    logic peripheral_ce;
-    wire clk_chipset;
+    wire clk_100;                // 100 MHz, i8088 core
+    wire clk_28_636;             // CGA dot clock
+    wire clk_32_514;             // HGC dot clock (x2)
+    reg clk_14_318 = 1'b0;       // splash + UART reference
+    wire clk_cpu;                // 8088 pin clock (gated)
+    logic cpu_ce_posedge;        // CPU clock-enable, rising
+    logic cpu_ce_negedge;        // CPU clock-enable, falling
+    logic peripheral_ce;         // peripheral clock-enable
+    wire clk_chipset;            // 50 MHz, main domain
 
-    localparam [27:0] cur_rate = 28'd50000000;
+    localparam [27:0] cur_rate = 28'd50000000; // chipset clock rate, Hz
 
-    wire clk_sdram_ph;
-    wire clk_pix_cga;
-    wire clk_pix_cga_90;
-    wire clk_pix_hgc;
-    wire clk_pix_hgc_90;
-    wire clk_pix;
-    wire clk_pix_90;
-    wire pll_video_locked;
-    wire pll_video_hgc_locked;
+    wire clk_sdram_ph;           // SDRAM pin clock, phase-shifted
+    wire clk_pix_cga;            // CGA pixel
+    wire clk_pix_cga_90;         // CGA pixel, 90 deg
+    wire clk_pix_hgc;            // HGC pixel
+    wire clk_pix_hgc_90;         // HGC pixel, 90 deg
+    wire clk_pix;                // selected pixel, video out
+    wire clk_pix_90;             // selected pixel, 90 deg
+    wire pll_video_locked;       // CGA PLL lock
+    wire pll_video_hgc_locked;   // HGC PLL lock
 
     // System PLL: 50 MHz (chipset + SDRAM ctrl), 100 MHz (CPU), 50 MHz@ps (dram_clk).
     pll pll
@@ -474,9 +322,7 @@ module core_top (
     );
 
     // Hercules video PLL: 32.514 MHz (HGC dot clock x2), 16.257 MHz pixel + 90-deg
-    // sibling. Referenced from clk_74b: the clk_74a pin reaches only the two
-    // bottom-edge fractional-PLL sites, and pll / pll_video occupy those. Absent
-    // the card, the tie-offs free the PLL site and fold the RESET lock term.
+    // sibling. From clk_74b: pll / pll_video already hold both clk_74a PLL sites.
     generate if (`ENABLE_HGC) begin : gen_pll_video_hgc
     pll_video_hgc pll_video_hgc
     (
@@ -494,12 +340,90 @@ module core_top (
     assign pll_video_hgc_locked = 1'b1;
     end endgenerate
 
-    // The video back-end (palette tint -> credits -> OSD -> output regs and the
-    // scaler's video_rgb_clock) runs on whichever pixel pair matches the displayed
-    // card; the two card domains themselves never switch. swap_video (the keyboard
-    // module's follower of the displayed-card select) drives this sequencer: blank
-    // the output, flip both clock muxes mid-window, un-blank once the scaler has
-    // seen frames of the new timing.
+    always @(posedge clk_28_636)
+        clk_14_318 <= ~clk_14_318;   // 14.318 MHz toggle for splash / UART timing
+
+    // CPU clock: XT_CE_Generator derives the 8088 pin clock and its CE strobes;
+    // clk_select sets the speed and is reloaded each bus cycle (biu_done).
+    logic  biu_done;
+    logic  [7:0] clock_cycle_counter_division_ratio;
+    logic  [7:0] clock_cycle_counter_decrement_value;
+    logic        shift_read_timing;
+    logic  [1:0] ram_read_wait_cycle;
+    logic  [1:0] ram_write_wait_cycle;
+    logic        cycle_accrate;
+    logic  [1:0] clk_select;
+    wire   [1:0] clk_select_next = ((xtctl[3:2] == 2'b00) && ~xtctl[7]) ? cpu_speed_cfg :
+                                   (xtctl[7] ? 2'b11 : xtctl[3:2] - 2'b01);
+
+    always @(posedge clk_chipset, posedge reset)
+    begin
+        if (reset)
+            clk_select <= 2'b00;
+        else if (biu_done)
+            clk_select <= clk_select_next;
+    end
+
+    XT_CE_Generator u_XT_CE_Generator
+    (
+        .clock                              (clk_chipset),
+        .reset                              (reset),
+        .clk_select_load                    (biu_done),
+        .clk_select                         (clk_select_next),
+        .cpu_clk_pin                        (clk_cpu),
+        .cpu_ce_posedge                     (cpu_ce_posedge),
+        .cpu_ce_negedge                     (cpu_ce_negedge),
+        .peripheral_ce                      (peripheral_ce),
+        .cycle_accrate                      (cycle_accrate),
+        .clock_cycle_counter_division_ratio (clock_cycle_counter_division_ratio),
+        .clock_cycle_counter_decrement_value(clock_cycle_counter_decrement_value),
+        .shift_read_timing                  (shift_read_timing),
+        .ram_read_wait_cycle                (ram_read_wait_cycle),
+        .ram_write_wait_cycle               (ram_write_wait_cycle)
+    );
+
+    // COM baud clock-enables: a clk_14_318 edge sampled onto clk_chipset (COM1),
+    // divided by 8 for COM2.
+    logic clk_uart_ff_1;
+    logic clk_uart_ff_2;
+    logic clk_uart_ff_3;
+    logic clk_uart_en;
+    logic clk_uart2_en;
+    logic [2:0] clk_uart2_counter;
+
+    always @(posedge clk_chipset)
+    begin
+        clk_uart_ff_1 <= clk_14_318;
+        clk_uart_ff_2 <= clk_uart_ff_1;
+        clk_uart_ff_3 <= clk_uart_ff_2;
+        clk_uart_en   <= ~clk_uart_ff_3 & clk_uart_ff_2;
+    end
+
+    always @(posedge clk_chipset)
+    begin
+        if (clk_uart_en)
+        begin
+            if (3'd7 != clk_uart2_counter)
+            begin
+                clk_uart2_counter <= clk_uart2_counter +3'd1;
+                clk_uart2_en <= 1'b0;
+            end
+            else
+            begin
+                clk_uart2_counter <= 3'd0;
+                clk_uart2_en <= 1'b1;
+            end
+        end
+        else
+        begin
+            clk_uart2_counter <= clk_uart2_counter;
+            clk_uart2_en <= 1'b0;
+        end
+    end
+
+    // Pixel-clock switch: video_rgb_clock follows the displayed card's pixel pair.
+    // On a card change (swap_video), blank the output, flip both muxes mid-window,
+    // then un-blank once the scaler has seen frames of the new timing.
     wire swap_video_chip;
     synch_3 s_swap_video (swap_video, swap_video_chip, clk_chipset);
     reg         pix_sel   = 1'b0;   // 0 = CGA pixel pair, 1 = HGC pixel pair
@@ -532,164 +456,144 @@ module core_top (
         .outclk    (clk_pix_90)
     );
 
+    //
+    // RESET
+    //
+
     // Global power-on reset until all PLLs lock.
     wire RESET = ~pll_locked | ~pll_video_locked | ~pll_video_hgc_locked;
-    // ROM-load reset hold: keep the machine in reset while APF streams a slot,
-    // and from power-on until the first load completes, so the CPU never runs
-    // without a BIOS. The BIOS write path is on the separate reset_sdram, which
-    // stays up. Driven in the ROM-load glue below.
-    wire        is_downloading;      // APF slot load active (clk_chipset)
-    wire        load_active;         // is_downloading OR the FIFO still draining
-    reg         bios_ever_loaded = 1'b0;
 
-    // Interact-menu "Reset PC" action (interact.json): the Pocket writes 0x50 once
-    // when the user selects it. Stretch that single clk_74a write into a level, sync
-    // it to the chipset clock, and fold it into the guest reset so the machine
-    // re-POSTs and the disk softcore re-mounts the current floppy images.
-    reg [19:0] interact_reset_delay = 20'd0;
-    // Interact-menu "Extra Options" action: the Pocket writes 0x54 once; the same single-write
-    // stretch, synced to the softcore (which owns the OSD) so it opens the settings panel. The
-    // guaranteed opener if Button Select has been remapped away from Settings.
-    reg [19:0] osd_open_delay = 20'd0;
-    // Interact-menu settings (interact.json list variables), each latched write-only
-    // from its own bridge address, then synch_3'd into the core clock and consumed
-    // directly by the machine below.
-    reg  [1:0] wp_cfg_74a        = 2'd0;   // floppy write-protect {B:, A:}
-    reg        splash_cfg_74a    = 1'b1;   // boot splash enable (default on)
-    reg  [7:0] key_a_74a         = 8'h14;  // A default: L-Ctrl (Set-2 scancode)
-    reg  [7:0] key_b_74a         = 8'h11;  // B default: L-Alt
-    reg  [7:0] key_x_74a         = 8'h29;  // X default: Space
-    reg  [7:0] key_y_74a         = 8'h5A;  // Y default: Enter
-    reg  [1:0] gamepad_74a       = 2'd0;   // 0 = keyboard, 1 = joystick (game port), 2 = mouse
-    reg  [7:0] select_cfg_74a    = 8'hF1;  // Button Select: 0xF1 = Settings (default)
-    reg  [7:0] start_cfg_74a     = 8'hF2;  // Button Start: 0xF2 = Pause/Credits (default)
-    reg        credits_active_74a = 1'b0;  // credits showing: set by the menu action, cleared by any button
-    // Pad button words refresh from an unvalidated ~1 ms poll and can bounce; a
-    // single bad poll would false-edge every consumer. Publish a new word only after
-    // several polls agree. Analog joy words are level-read and pass through raw.
-    reg [15:0] cont1_key_s = 16'd0;        // settled button words, all consumers below
-    reg [15:0] cont2_key_s = 16'd0;
-    reg [15:0] key1_cand   = 16'd0;
-    reg [15:0] key2_cand   = 16'd0;
-    reg [17:0] key_stable  = 18'd0;        // 2^18 clk_74a cycles = 3.5 ms
-    always @(posedge clk_74a) begin
-        if (cont1_key != key1_cand || cont2_key != key2_cand) begin
-            key1_cand  <= cont1_key;
-            key2_cand  <= cont2_key;
-            key_stable <= 18'd0;
-        end else if (!(&key_stable))
-            key_stable <= key_stable + 18'd1;
-        else begin
-            cont1_key_s <= key1_cand;
-            cont2_key_s <= key2_cand;
-        end
-    end
-    wire       any_btn_74a;                // any Pocket controller-1 button, synced to this domain
-    synch_3 s_anybtn (|cont1_key_s, any_btn_74a, clk_74a);
-    wire       osd_reset_req_74a;          // OSD Reset PC request, synced from the softcore
-    synch_3 s_osd_reset_74a (osd_reset_req, osd_reset_req_74a, clk_74a);
-    wire       osd_credits_req_74a;        // OSD Show Credits request, synced from the softcore
-    synch_3 s_osd_credits_74a (osd_credits_req, osd_credits_req_74a, clk_74a);
-    reg        any_btn_74a_d = 1'b0;
-    reg        osd_credits_req_74a_d = 1'b0;
-    always @(posedge clk_74a) begin
-        if (interact_reset_delay != 20'd0)
-            interact_reset_delay <= interact_reset_delay - 20'd1;
-        if (osd_open_delay != 20'd0)
-            osd_open_delay <= osd_open_delay - 20'd1;
-        if (bridge_wr) begin
-            case (bridge_addr)
-                32'h0000_0050: interact_reset_delay <= 20'hFFFFF;  // Reset & Apply
-                32'h0000_0054: osd_open_delay       <= 20'hFFFFF;  // Extra Options (open OSD)
-                32'h0000_006C: wp_cfg_74a        <= bridge_wr_data[1:0];
-                32'h0000_0068: splash_cfg_74a    <= bridge_wr_data[0];
-                32'h0000_0080: key_a_74a         <= bridge_wr_data[7:0];
-                32'h0000_0084: key_b_74a         <= bridge_wr_data[7:0];
-                32'h0000_0088: key_x_74a         <= bridge_wr_data[7:0];
-                32'h0000_008C: key_y_74a         <= bridge_wr_data[7:0];
-                32'h0000_0090: gamepad_74a       <= bridge_wr_data[1:0];
-                32'h0000_0094: select_cfg_74a    <= bridge_wr_data[7:0];
-                32'h0000_0098: start_cfg_74a     <= bridge_wr_data[7:0];
-            endcase
-        end
-        if (osd_reset_req_74a)
-            interact_reset_delay <= 20'hFFFFF;  // OSD Reset PC reuses the interact reset stretch
-        // Show Credits request (from the OSD) and the any-button dismiss are edge-detected: the
-        // button that picks Show Credits is still held, so a level dismiss would clear it at once.
-        any_btn_74a_d         <= any_btn_74a;
-        osd_credits_req_74a_d <= osd_credits_req_74a;
-        if (osd_credits_req_74a & ~osd_credits_req_74a_d)
-            credits_active_74a <= 1'b1;
-        else if (any_btn_74a & ~any_btn_74a_d)
-            credits_active_74a <= 1'b0;
-    end
-    wire       interact_reset;
-    wire       osd_open_req;
-    wire [1:0] cpu_speed_cfg;
-    wire [1:0] bios_wr_cfg;
-    wire [1:0] wp_cfg;
-    wire [1:0] opl2_cfg;
-    wire [1:0] boost_cfg;
-    wire [1:0] spk_vol_cfg;
-    wire [1:0] stereo_mix_cfg;
-    wire       cms_cfg;
-    wire       ems_en_cfg;
-    wire [1:0] ems_frame_cfg;
-    wire       a000_en_cfg;
-    wire       video_1st_cfg;
-    // The OSD-driven display palette, synced into the clk_pix video domain for the output tint.
-    wire [2:0] palette_cfg;
-    synch_3              s_interact_reset (|interact_reset_delay, interact_reset, clk_chipset);
-    synch_3              s_osd_open       (|osd_open_delay,    osd_open_req,  clk_chipset);
-    synch_3 #(.WIDTH(2)) s_cpu_speed_cfg  (osd_cpu_speed,     cpu_speed_cfg, clk_chipset);
-    synch_3 #(.WIDTH(2)) s_bios_wr_cfg    (osd_bios_wr,       bios_wr_cfg,   clk_chipset);
-    synch_3 #(.WIDTH(2)) s_wp_cfg         (wp_cfg_74a,        wp_cfg,        clk_chipset);
-    synch_3 #(.WIDTH(2)) s_opl2_cfg       (osd_opl2,          opl2_cfg,      clk_chipset);
-    synch_3 #(.WIDTH(2)) s_boost_cfg      (osd_boost,         boost_cfg,     clk_chipset);
-    synch_3 #(.WIDTH(2)) s_spk_vol_cfg    (osd_spk_vol,       spk_vol_cfg,   clk_chipset);
-    synch_3 #(.WIDTH(2)) s_stereo_cfg     (osd_stereo,        stereo_mix_cfg, clk_chipset);
-    synch_3              s_cms_cfg        (osd_cms,           cms_cfg,       clk_chipset);
-    synch_3              s_composite_cfg  (osd_composite,     composite_cfg, clk_chipset);
-    synch_3              s_ems_en_cfg     (osd_ems,           ems_en_cfg,    clk_chipset);
-    synch_3 #(.WIDTH(2)) s_ems_frame_cfg  (osd_ems_frame,     ems_frame_cfg, clk_chipset);
-    synch_3              s_a000_en_cfg    (osd_a000,          a000_en_cfg,   clk_chipset);
-    synch_3 #(.WIDTH(2)) s_joy1_cfg       (osd_joy1,          joy1_cfg,      clk_chipset);
-    synch_3 #(.WIDTH(2)) s_joy2_cfg       (osd_joy2,          joy2_cfg,      clk_chipset);
-    synch_3              s_swapjoy_cfg    (osd_swapjoy,       swapjoy_cfg,   clk_chipset);
-    synch_3              s_syncjoy_cfg    (osd_syncjoy,       syncjoy_cfg,   clk_chipset);
-    synch_3              s_video_1st_cfg  (osd_video_1st,     video_1st_cfg, clk_chipset);
-    synch_3              s_cga_gfx_cfg    (osd_cga_gfx,       cga_gfx_cfg,   clk_chipset);
-    synch_3              s_hgc_gfx_cfg    (osd_hgc_gfx,       hgc_gfx_cfg,   clk_chipset);
-    synch_3 #(.WIDTH(8)) s_key_a          (key_a_74a,         key_a,         clk_chipset);
-    synch_3 #(.WIDTH(8)) s_key_b          (key_b_74a,         key_b,         clk_chipset);
-    synch_3 #(.WIDTH(8)) s_key_x          (key_x_74a,         key_x,         clk_chipset);
-    synch_3 #(.WIDTH(8)) s_key_y          (key_y_74a,         key_y,         clk_chipset);
-    synch_3 #(.WIDTH(2))  s_gamepad       (gamepad_74a,       gamepad_mode,  clk_chipset);
-    synch_3 #(.WIDTH(8))  s_select_cfg    (select_cfg_74a,    select_cfg,    clk_chipset);
-    synch_3 #(.WIDTH(8))  s_start_cfg     (start_cfg_74a,     start_cfg,     clk_chipset);
-    synch_3 #(.WIDTH(16)) s_cont1_chip    (cont1_key_s,       cont1_key_chip, clk_chipset);
-    synch_3 #(.WIDTH(16)) s_cont2_chip    (cont2_key_s,       cont2_key_chip, clk_chipset);
-    synch_3 #(.WIDTH(32)) s_cont1_joy     (cont1_joy,         cont1_joy_chip, clk_chipset);
-    synch_3 #(.WIDTH(32)) s_cont2_joy     (cont2_joy,         cont2_joy_chip, clk_chipset);
-    synch_3 #(.WIDTH(3)) s_palette_cfg    (osd_palette,       palette_cfg,   clk_pix);
-    wire credits_mode_pix;
-    wire credits_mode_chip;
-    synch_3 s_credits_pix  (credits_active_74a, credits_mode_pix,  clk_pix);
-    synch_3 s_credits_chip (credits_active_74a, credits_mode_chip, clk_chipset);
-    wire pause_core = pause_core_chipset | credits_mode_chip;
-
+    // Guest reset terms: PLL lock (RESET), host reset (status[0]), ROM load and the
+    // first-BIOS gate, interact/OSD Reset PC, and the splash holds. sdram holds on lock only.
     wire reset_wire = RESET | status[0] | load_active | ~bios_ever_loaded | interact_reset
                     | splashscreen_sync2 | splash_reset_hold | splash_pending_sync2;
     wire reset_sdram_wire = RESET;
 
+    logic reset = 1'b1;
+    logic [15:0] reset_count = 16'h0000;
+    logic reset_sdram = 1'b1;
+    logic [15:0] reset_sdram_count = 16'h0000;
+
+    always @(posedge clk_chipset, posedge reset_wire)
+    begin
+        if (reset_wire)
+        begin
+            reset <= 1'b1;
+            reset_count <= 16'h0000;
+        end
+        else if (reset)
+        begin
+            if (reset_count != 16'hffff)
+            begin
+                reset <= 1'b1;
+                reset_count <= reset_count + 16'h0001;
+            end
+            else
+            begin
+                reset <= 1'b0;
+                reset_count <= reset_count;
+            end
+        end
+        else
+        begin
+            reset <= 1'b0;
+            reset_count <= reset_count;
+        end
+    end
+
+    logic reset_cpu_ff = 1'b1;
+    logic reset_cpu = 1'b1;
+    logic [15:0] reset_cpu_count = 16'h0000;
+
+    always @(negedge clk_chipset, posedge reset)
+    begin
+        if (reset)
+            reset_cpu_ff <= 1'b1;
+        else
+            reset_cpu_ff <= reset;
+    end
+
+    reg hgc_mode = 0;
+
+    always @(negedge clk_chipset, posedge reset)
+    begin
+        if (reset)
+        begin
+            hgc_mode <= `ENABLE_HGC ? (`ENABLE_CGA ? video_1st_cfg : 1'b1) : 1'b0;
+            reset_cpu <= 1'b1;
+            reset_cpu_count <= 16'h0000;
+        end
+        else if (reset_cpu)
+        begin
+            reset_cpu <= reset_cpu_ff;
+            reset_cpu_count <= 16'h0000;
+        end
+        else
+        begin
+            if (reset_cpu_count != 16'h002A)
+            begin
+                reset_cpu <= reset_cpu_ff;
+                reset_cpu_count <= reset_cpu_count + 16'h0001;
+            end
+            else
+            begin
+                reset_cpu <= 1'b0;
+                reset_cpu_count <= reset_cpu_count;
+            end
+        end
+    end
+
+    always @(posedge clk_chipset, posedge reset_sdram_wire)
+    begin
+        if (reset_sdram_wire)
+        begin
+            reset_sdram <= 1'b1;
+            reset_sdram_count <= 16'h0000;
+        end
+        else if (reset_sdram)
+        begin
+            if (reset_sdram_count != 16'hffff)
+            begin
+                reset_sdram <= 1'b1;
+                reset_sdram_count <= reset_sdram_count + 16'h0001;
+            end
+            else
+            begin
+                reset_sdram <= 1'b0;
+                reset_sdram_count <= reset_sdram_count;
+            end
+        end
+        else
+        begin
+            reset_sdram <= 1'b0;
+            reset_sdram_count <= reset_sdram_count;
+        end
+    end
+
     //
-    //////////////////   APF bridge command interface   ////////////////
+    // HOST BRIDGE
     //
-    // core_bridge_cmd handles APF host<->core commands (status, dataslot
-    // request/complete, data table) on the clk_74a bridge domain and drives the
-    // command read window (see the bridge_rd_data mux above). Savestate / RTC /
-    // target-dataslot / on-screen-notify are unused here and tied off; the
-    // dataslot request/complete outputs feed the ROM-load download glue.
+
+    // Bridge reads: 0xF8=command window, 0x6=softcore dataslot read-back, else 0. The
+    // softcore word is registered on bridge_rd (the APF samples before pulsing rd) and
+    // gated to 0x6 so a command-window read cannot clobber it.
+    wire [31:0] cmd_bridge_rd_data;
+    wire [31:0] softcpu_bridge_rd_data;
+    reg  [31:0] softcpu_rd_data_buf;
+    always @(posedge clk_74a) begin
+        if (bridge_rd && bridge_addr[31:28] == 4'h6)
+            softcpu_rd_data_buf <= softcpu_bridge_rd_data;
+    end
+    always @(*) begin
+        casex (bridge_addr)
+            32'hF8xxxxxx: bridge_rd_data = cmd_bridge_rd_data;
+            32'h6xxxxxxx: bridge_rd_data = softcpu_rd_data_buf;
+            default:      bridge_rd_data = 32'd0;
+        endcase
+    end
+
+    // APF host<->core commands (status, dataslot, data table) on clk_74a; savestate,
+    // RTC and on-screen-notify are unused and tied off.
 
     wire        reset_n;   // APF-driven core reset (bridge domain)
 
@@ -726,11 +630,9 @@ module core_top (
     wire        target_dataslot_done;
     wire  [2:0] target_dataslot_err;
 
-    // Data table (dataslot ID/size), two words per slot index, also written by APF at
-    // load. Rotate: redeclare the Settings size (word 13; absent on first boot, and a
-    // 0-size slot never flushes) and scan the hard-disk sizes (words 9/11; a persisted
-    // image appears only here, never as a dataslot update). Reads land two cycles
-    // after the address.
+    // Datatable scan: re-declare the Settings size (word 13, else a 0-size slot never
+    // flushes) and read the HDD sizes (words 9/11, never seen as dataslot updates).
+    // Reads land two cycles after the address.
     reg  [2:0]  datatable_phase = 3'd0;
     reg  [9:0]  datatable_addr  = 10'd13;
     reg         datatable_wren  = 1'b0;
@@ -826,16 +728,22 @@ module core_top (
         .datatable_q               (datatable_q)
     );
 
-    // ---- Disk softcore ----
-    // Services CHIPSET's floppy.v: pulls sectors from a drive's dataslot with
-    // core_bridge_cmd's target_dataslot handshake and streams them over the
-    // management bus. A floppy image's size is reported once as a dataslot update
-    // (bytes); the hard-disk sizes come from the data table scan above. Convert to
-    // sectors on the chipset clock and hand them to the firmware.
-    // Floppy images are dataslot id 3 (drive 0) and id 4 (drive 1); the hard disks are
-    // id 5 (master) and id 6 (slave); id 1 is the main BIOS and id 2 the EC00 option
-    // ROM. Keep in step with FDD0_SLOT_ID / FDD1_SLOT_ID / HDD0_SLOT_ID / HDD1_SLOT_ID
-    // in the firmware and the slots in data.json.
+    //
+    // STORAGE SOFTCORE
+    //
+
+    // Disk management bus, mastered by the disk softcore (u_softcpu, below).
+    wire [15:0] mgmt_din;              // CHIPSET readdata -> softcore
+    wire [15:0] mgmt_dout;             // softcore -> CHIPSET write data
+    wire [15:0] mgmt_addr;             // softcore -> CHIPSET address
+    wire        mgmt_rd;               // softcore -> CHIPSET read strobe
+    wire        mgmt_wr;               // softcore -> CHIPSET write strobe
+    wire  [7:0] mgmt_req;              // [7:6] fdd request, [2:0] ide0 (from CHIPSET)
+    assign mgmt_req[5:3] = 3'b000;
+
+    // Floppy size arrives once as a dataslot update (bytes); HDD sizes come from the
+    // datatable scan above. Slots (match firmware *_SLOT_ID + data.json): 1 BIOS,
+    // 2 EC00 ROM, 3/4 floppy 0/1, 5/6 IDE 0/1.
     reg [31:0] fdd0_slot_bytes_74a = 32'd0;
     reg [31:0] fdd1_slot_bytes_74a = 32'd0;
     always @(posedge clk_74a) begin
@@ -845,13 +753,9 @@ module core_top (
             fdd1_slot_bytes_74a <= dataslot_update_size;
     end
 
-    // A floppy image (re)binds by a dataslot update, which fires even when the new image
-    // is the same size as the old one. Toggle a per-drive bit on each bind so the firmware
-    // re-runs the mount, whose eject-then-insert makes floppy.v re-assert its media-change
-    // line; a same-size swap otherwise leaves the guest reading the directory it cached
-    // from the previous disk. dataslot_update is held for several clk_74a cycles per
-    // command, so flip on its rising edge only: a level toggle would flip an even number
-    // of times across the pulse and cancel.
+    // A floppy (re)bind arrives as a dataslot update (fires even on a same-size swap).
+    // Toggle a per-drive bit on its rising edge so the firmware re-mounts and floppy.v
+    // re-asserts media-change (edge, not level: the pulse spans several cycles).
     reg        fdd0_rebind_74a   = 1'b0;
     reg        fdd1_rebind_74a   = 1'b0;
     reg        dataslot_update_d = 1'b0;
@@ -905,9 +809,8 @@ module core_top (
         .clk (clk_chipset)
     );
 
-    // OSD overlay interconnect: the raster counters (driven in the video output
-    // stage) locate the framebuffer readout; the softcore returns a 4bpp palette
-    // index + in-area flag, composited into the picture there.
+    // OSD interconnect: the video-stage raster counters locate the framebuffer read;
+    // the softcore returns a 4bpp palette index + in-area flag, composited there.
     reg  [9:0] osd_hcnt = 10'd0;
     reg  [9:0] osd_vcnt = 10'd0;
     wire [9:0] osd_vcnt_sel;         // line index of the presented raster (assigned at the canvas)
@@ -1024,10 +927,310 @@ module core_top (
         .osd_hgc_gfx                (osd_hgc_gfx)
     );
 
-    // ---- ROM-load download tracking ----
-    // dataslot_requestwrite marks the start of an APF->core slot stream;
-    // dataslot_allcomplete marks the end. Track it on the bridge clock, then
-    // sync into the chipset domain for the loader and the reset hold above.
+    //
+    // SETTINGS
+    //
+
+    localparam tandy_video_mode = `ENABLE_TANDY_VIDEO;
+
+    wire forced_scandoubler;
+    wire [1:0] buttons;
+    // Fixed Pocket defaults; user options come from osd_* and *_cfg, not here.
+    // Only the constant status[...] reads remain. Feature availability is set by the
+    // ENABLE_* macros (config.tcl), defaulted off by the `ifndef fallbacks above.
+    wire [63:0] status = 64'h0000_0000_0000_0080;
+    wire [7:0]  xtctl;
+
+    // Interact "Reset PC" (0x50): stretch the one-shot write to a level, sync to the
+    // chipset clock, and fold into the guest reset so the machine re-POSTs.
+    reg [19:0] interact_reset_delay = 20'd0;
+    // Interact "Extra Options" (0x54): same one-shot stretch to the softcore, which
+    // opens the settings OSD (the guaranteed opener if Button Select was remapped).
+    reg [19:0] osd_open_delay = 20'd0;
+    // Interact list settings: each latched write-only from its bridge address, then
+    // synced into the core clock below.
+    reg  [1:0] wp_cfg_74a        = 2'd0;   // floppy write-protect {B:, A:}
+    reg        splash_cfg_74a    = 1'b1;   // boot splash enable (default on)
+    reg  [7:0] key_a_74a         = 8'h14;  // A default: L-Ctrl (Set-2 scancode)
+    reg  [7:0] key_b_74a         = 8'h11;  // B default: L-Alt
+    reg  [7:0] key_x_74a         = 8'h29;  // X default: Space
+    reg  [7:0] key_y_74a         = 8'h5A;  // Y default: Enter
+    reg  [1:0] gamepad_74a       = 2'd0;   // 0 = keyboard, 1 = joystick (game port), 2 = mouse
+    reg  [7:0] select_cfg_74a    = 8'hF1;  // Button Select: 0xF1 = Settings (default)
+    reg  [7:0] start_cfg_74a     = 8'hF2;  // Button Start: 0xF2 = Pause/Credits (default)
+    reg        credits_active_74a = 1'b0;  // credits showing: set by the menu action, cleared by any button
+    // Pad button words come from an unvalidated ~1 ms poll and can bounce, so publish
+    // a word only after it holds ~3.5 ms; analog axes are level-read and pass raw.
+    reg [15:0] cont1_key_s = 16'd0;        // settled button words, all consumers below
+    reg [15:0] cont2_key_s = 16'd0;
+    reg [15:0] key1_cand   = 16'd0;
+    reg [15:0] key2_cand   = 16'd0;
+    reg [17:0] key_stable  = 18'd0;        // 2^18 clk_74a cycles = 3.5 ms
+    always @(posedge clk_74a) begin
+        if (cont1_key != key1_cand || cont2_key != key2_cand) begin
+            key1_cand  <= cont1_key;
+            key2_cand  <= cont2_key;
+            key_stable <= 18'd0;
+        end else if (!(&key_stable))
+            key_stable <= key_stable + 18'd1;
+        else begin
+            cont1_key_s <= key1_cand;
+            cont2_key_s <= key2_cand;
+        end
+    end
+    wire       any_btn_74a;                // any Pocket controller-1 button, synced to this domain
+    synch_3 s_anybtn (|cont1_key_s, any_btn_74a, clk_74a);
+    wire       osd_reset_req_74a;          // OSD Reset PC request, synced from the softcore
+    synch_3 s_osd_reset_74a (osd_reset_req, osd_reset_req_74a, clk_74a);
+    wire       osd_credits_req_74a;        // OSD Show Credits request, synced from the softcore
+    synch_3 s_osd_credits_74a (osd_credits_req, osd_credits_req_74a, clk_74a);
+    reg        any_btn_74a_d = 1'b0;
+    reg        osd_credits_req_74a_d = 1'b0;
+    always @(posedge clk_74a) begin
+        if (interact_reset_delay != 20'd0)
+            interact_reset_delay <= interact_reset_delay - 20'd1;
+        if (osd_open_delay != 20'd0)
+            osd_open_delay <= osd_open_delay - 20'd1;
+        if (bridge_wr) begin
+            case (bridge_addr)
+                32'h0000_0050: interact_reset_delay <= 20'hFFFFF;  // Reset & Apply
+                32'h0000_0054: osd_open_delay       <= 20'hFFFFF;  // Extra Options (open OSD)
+                32'h0000_006C: wp_cfg_74a        <= bridge_wr_data[1:0];
+                32'h0000_0068: splash_cfg_74a    <= bridge_wr_data[0];
+                32'h0000_0080: key_a_74a         <= bridge_wr_data[7:0];
+                32'h0000_0084: key_b_74a         <= bridge_wr_data[7:0];
+                32'h0000_0088: key_x_74a         <= bridge_wr_data[7:0];
+                32'h0000_008C: key_y_74a         <= bridge_wr_data[7:0];
+                32'h0000_0090: gamepad_74a       <= bridge_wr_data[1:0];
+                32'h0000_0094: select_cfg_74a    <= bridge_wr_data[7:0];
+                32'h0000_0098: start_cfg_74a     <= bridge_wr_data[7:0];
+            endcase
+        end
+        if (osd_reset_req_74a)
+            interact_reset_delay <= 20'hFFFFF;  // OSD Reset PC reuses the interact reset stretch
+        // Show Credits request (from the OSD) and the any-button dismiss are edge-detected: the
+        // button that picks Show Credits is still held, so a level dismiss would clear it at once.
+        any_btn_74a_d         <= any_btn_74a;
+        osd_credits_req_74a_d <= osd_credits_req_74a;
+        if (osd_credits_req_74a & ~osd_credits_req_74a_d)
+            credits_active_74a <= 1'b1;
+        else if (any_btn_74a & ~any_btn_74a_d)
+            credits_active_74a <= 1'b0;
+    end
+    wire       interact_reset;
+    wire       osd_open_req;
+    wire [1:0] cpu_speed_cfg;
+    wire [1:0] bios_wr_cfg;
+    wire [1:0] wp_cfg;
+    wire [1:0] opl2_cfg;
+    wire [1:0] boost_cfg;
+    wire [1:0] spk_vol_cfg;
+    wire [1:0] stereo_mix_cfg;
+    wire       cms_cfg;
+    wire       ems_en_cfg;
+    wire [1:0] ems_frame_cfg;
+    wire       a000_en_cfg;
+    wire       video_1st_cfg;
+    // The OSD-driven display palette, synced into the clk_pix video domain for the output tint.
+    wire [2:0] palette_cfg;
+    synch_3              s_interact_reset (|interact_reset_delay, interact_reset, clk_chipset);
+    synch_3              s_osd_open       (|osd_open_delay,    osd_open_req,  clk_chipset);
+    synch_3 #(.WIDTH(2)) s_cpu_speed_cfg  (osd_cpu_speed,     cpu_speed_cfg, clk_chipset);
+    synch_3 #(.WIDTH(2)) s_bios_wr_cfg    (osd_bios_wr,       bios_wr_cfg,   clk_chipset);
+    synch_3 #(.WIDTH(2)) s_wp_cfg         (wp_cfg_74a,        wp_cfg,        clk_chipset);
+    synch_3 #(.WIDTH(2)) s_opl2_cfg       (osd_opl2,          opl2_cfg,      clk_chipset);
+    synch_3 #(.WIDTH(2)) s_boost_cfg      (osd_boost,         boost_cfg,     clk_chipset);
+    synch_3 #(.WIDTH(2)) s_spk_vol_cfg    (osd_spk_vol,       spk_vol_cfg,   clk_chipset);
+    synch_3 #(.WIDTH(2)) s_stereo_cfg     (osd_stereo,        stereo_mix_cfg, clk_chipset);
+    synch_3              s_cms_cfg        (osd_cms,           cms_cfg,       clk_chipset);
+    synch_3              s_composite_cfg  (osd_composite,     composite_cfg, clk_chipset);
+    synch_3              s_ems_en_cfg     (osd_ems,           ems_en_cfg,    clk_chipset);
+    synch_3 #(.WIDTH(2)) s_ems_frame_cfg  (osd_ems_frame,     ems_frame_cfg, clk_chipset);
+    synch_3              s_a000_en_cfg    (osd_a000,          a000_en_cfg,   clk_chipset);
+    synch_3 #(.WIDTH(2)) s_joy1_cfg       (osd_joy1,          joy1_cfg,      clk_chipset);
+    synch_3 #(.WIDTH(2)) s_joy2_cfg       (osd_joy2,          joy2_cfg,      clk_chipset);
+    synch_3              s_swapjoy_cfg    (osd_swapjoy,       swapjoy_cfg,   clk_chipset);
+    synch_3              s_syncjoy_cfg    (osd_syncjoy,       syncjoy_cfg,   clk_chipset);
+    synch_3              s_video_1st_cfg  (osd_video_1st,     video_1st_cfg, clk_chipset);
+    synch_3              s_cga_gfx_cfg    (osd_cga_gfx,       cga_gfx_cfg,   clk_chipset);
+    synch_3              s_hgc_gfx_cfg    (osd_hgc_gfx,       hgc_gfx_cfg,   clk_chipset);
+    synch_3 #(.WIDTH(8)) s_key_a          (key_a_74a,         key_a,         clk_chipset);
+    synch_3 #(.WIDTH(8)) s_key_b          (key_b_74a,         key_b,         clk_chipset);
+    synch_3 #(.WIDTH(8)) s_key_x          (key_x_74a,         key_x,         clk_chipset);
+    synch_3 #(.WIDTH(8)) s_key_y          (key_y_74a,         key_y,         clk_chipset);
+    synch_3 #(.WIDTH(2))  s_gamepad       (gamepad_74a,       gamepad_mode,  clk_chipset);
+    synch_3 #(.WIDTH(8))  s_select_cfg    (select_cfg_74a,    select_cfg,    clk_chipset);
+    synch_3 #(.WIDTH(8))  s_start_cfg     (start_cfg_74a,     start_cfg,     clk_chipset);
+    synch_3 #(.WIDTH(16)) s_cont1_chip    (cont1_key_s,       cont1_key_chip, clk_chipset);
+    synch_3 #(.WIDTH(16)) s_cont2_chip    (cont2_key_s,       cont2_key_chip, clk_chipset);
+    synch_3 #(.WIDTH(32)) s_cont1_joy     (cont1_joy,         cont1_joy_chip, clk_chipset);
+    synch_3 #(.WIDTH(32)) s_cont2_joy     (cont2_joy,         cont2_joy_chip, clk_chipset);
+    synch_3 #(.WIDTH(3)) s_palette_cfg    (osd_palette,       palette_cfg,   clk_pix);
+    wire credits_mode_pix;
+    wire credits_mode_chip;
+    synch_3 s_credits_pix  (credits_active_74a, credits_mode_pix,  clk_pix);
+    synch_3 s_credits_chip (credits_active_74a, credits_mode_chip, clk_chipset);
+    wire pause_core = pause_core_chipset | credits_mode_chip;
+
+    // Controller-button config: key_* = per-face-button Set-2 scancode; gamepad_mode
+    // picks what the pad drives (mapped keys, game port, or serial mouse).
+    wire [7:0]  key_a, key_b, key_x, key_y;
+    wire [1:0]  gamepad_mode;
+    wire        gamepad  = (gamepad_mode == 2'd1);
+    wire        mousepad = (gamepad_mode == 2'd2);
+    // Button Select/Start: 0xF1=Settings, 0xF2=Pause/Credits, 0xF3=CGA/HGC toggle, else
+    // a Set-2 key. Split into an OSD function id and a key scancode (0 for the functions).
+    wire [7:0]  select_cfg, start_cfg;
+    wire [3:0]  select_fn  = (select_cfg == 8'hF1) ? 4'd1 : (select_cfg == 8'hF2) ? 4'd2 :
+                             (select_cfg == 8'hF3) ? 4'd3 : 4'd0;
+    wire [3:0]  start_fn   = (start_cfg  == 8'hF1) ? 4'd1 : (start_cfg  == 8'hF2) ? 4'd2 :
+                             (start_cfg  == 8'hF3) ? 4'd3 : 4'd0;
+    wire [7:0]  select_key = (select_cfg < 8'hF0) ? select_cfg : 8'h00;
+    wire [7:0]  start_key  = (start_cfg  < 8'hF0) ? start_cfg  : 8'h00;
+    wire [15:0] cont1_key_chip;
+    wire [15:0] cont2_key_chip;
+    wire [31:0] cont1_joy_chip, cont2_joy_chip;
+
+    // Game-port options from the settings OSD: [4]=Sync-to-CPU turbo timing, [3:2]=Joystick 2,
+    // [1:0]=Joystick 1; each 2-bit field is 0=Analog, 1=Digital, 2=Disabled.
+    wire [1:0]  joy1_cfg, joy2_cfg;
+    wire        swapjoy_cfg, syncjoy_cfg;
+    wire [4:0]  joy_opts = {syncjoy_cfg, joy2_cfg, joy1_cfg};
+
+    wire composite_cfg;   // CGA composite colour decode (settings bank, 0x7C)
+    wire cga_gfx_cfg, hgc_gfx_cfg;   // CGA/Hercules Graphics I/O enables (settings bank; 0 = Yes)
+    wire composite = composite_cfg | xtctl[0];
+    wire [1:0] scale = status[2:1];
+    wire a000h = `ENABLE_A000_UMB ? (a000_en_cfg & ~xtctl[6]) : 1'b0;
+    wire [2:0] vsync_width_osd = status[56:54];  // 0=Auto (use register), 1-7=override
+    wire [2:0] hsync_width_osd = status[59:57];  // 0=Auto, 1-7=fixed width (Nx16 pixel clocks)
+
+    reg [1:0]   scale_video_ff;
+    reg         hgc_mode_video_ff;
+    reg         cga_hw;
+    wire        video_scandoubler_en = (scale_video_ff > 0) || forced_scandoubler;
+    wire        cga_scandouble_en = video_scandoubler_en;
+    reg         hercules_hw;
+
+    always @(posedge clk_chipset)
+    begin
+        scale_video_ff          <= scale;
+        cga_hw                  <= `ENABLE_CGA ? (`ENABLE_HGC ? (~cga_gfx_cfg | tandy_video_mode) : 1'b1) : 1'b0;
+        hercules_hw             <= `ENABLE_HGC ? (`ENABLE_CGA ? ~hgc_gfx_cfg : 1'b1) : 1'b0;
+    end
+
+    always @(posedge clk_chipset)
+        hgc_mode_video_ff       <= `ENABLE_HGC ? hgc_mode : 1'b0;
+
+    //
+    // Config + input stubs for the CHIPSET signals the Pocket doesn't drive.
+    //
+    assign forced_scandoubler = 1'b0;
+    assign buttons            = 2'b00;
+
+    //
+    // INPUT
+    //
+
+    wire  [7:0] kb_byte;
+    wire        kb_valid;
+    wire        kb_ready;
+
+    wire        mouse_rd;
+    wire        mouse_rts_n;
+
+    wire [13:0] joy0, joy1;
+    wire [15:0] joya0, joya1;
+
+    // Pocket controllers -> game-port digital bits: [5]=fire2 [4]=fire1 [3]=up [2]=down
+    // [1]=left [0]=right, from cont key bits [0]=up [1]=down [2]=left [3]=right [4]=A [5]=B.
+    wire [13:0] cont1_dig = {8'd0, cont1_key_chip[5], cont1_key_chip[4],
+                                   cont1_key_chip[0], cont1_key_chip[1],
+                                   cont1_key_chip[2], cont1_key_chip[3]};
+    wire [13:0] cont2_dig = {8'd0, cont2_key_chip[5], cont2_key_chip[4],
+                                   cont2_key_chip[0], cont2_key_chip[1],
+                                   cont2_key_chip[2], cont2_key_chip[3]};
+    // Left stick -> analog: Pocket axes are unsigned centred on 0x80, the port wants
+    // signed centred on 0, so flip the top bit. An all-zero pad (no analog) is held at
+    // centre (a raw 0 would otherwise read as full deflection).
+    wire [15:0] cont1_ana = (cont1_joy_chip == 32'd0) ? 16'd0
+                          : {cont1_joy_chip[15:8] ^ 8'h80, cont1_joy_chip[7:0] ^ 8'h80};
+    wire [15:0] cont2_ana = (cont2_joy_chip == 32'd0) ? 16'd0
+                          : {cont2_joy_chip[15:8] ^ 8'h80, cont2_joy_chip[7:0] ^ 8'h80};
+    // Controller 1 reaches the port only in Gamepad Mode (else its buttons type keys); controller 2
+    // is always player 2. Both idle while an OSD panel is open, and a Disabled port sends nothing.
+    wire        p1_on = gamepad && !osd_active && (joy1_cfg != 2'd2);
+    wire        p2_on = !osd_active && (joy2_cfg != 2'd2);
+    assign joy0  = p1_on ? cont1_dig : 14'd0;
+    assign joy1  = p2_on ? cont2_dig : 14'd0;
+    assign joya0 = p1_on ? cont1_ana : 16'd0;
+    assign joya1 = p2_on ? cont2_ana : 16'd0;
+
+    //
+    // Keyboard: pad buttons + docked USB keyboard + VKB merged into one Set-2 byte
+    // stream (kb_byte/kb_valid, paced by kb_ready). In mouse mode the D-pad and A/B
+    // drop out (they drive the mouse); X/Y and Select/Start stay mapped keys.
+    wire [15:0] kb_buttons = mousepad ? (cont1_key_s & 16'hFFC0) : cont1_key_s;
+
+    pocket_keyboard u_pocket_keyboard (
+        .clk          (clk_chipset),
+        .reset        (reset),
+        .buttons      (kb_buttons),
+        .gamepad      (gamepad),
+        .osd_active   (osd_active | credits_mode_chip),
+        .vkb_key      (vkb_key),
+        .vkb_stb      (vkb_stb),
+        .cfg_a        (key_a),
+        .cfg_b        (key_b),
+        .cfg_x        (key_x),
+        .cfg_y        (key_y),
+        .cfg_select   (select_key),
+        .cfg_start    (start_key),
+        .cont3_joy    (cont3_joy),
+        .cont3_trig   (cont3_trig),
+        .cont3_key    (cont3_key),
+        .kb_byte      (kb_byte),
+        .kb_valid     (kb_valid),
+        .kb_ready     (kb_ready)
+    );
+
+    //
+    // Mouse: docked USB mouse (cont4_*) -> Microsoft serial byte stream on COM1, paced
+    // by RTS. In mouse mode the pad's D-pad and A/B drive it too; quiet under an overlay.
+    //
+    wire [5:0] mouse_pad = (mousepad && !(osd_active | credits_mode_chip)) ?
+                           cont1_key_chip[5:0] : 6'd0;
+
+    pocket_mouse u_pocket_mouse (
+        .clk          (clk_chipset),
+        .cont4_joy    (cont4_joy),
+        .cont4_key    (cont4_key),
+        .cont4_trig   (cont4_trig),
+        .pad          (mouse_pad),
+        .rts_n        (mouse_rts_n),
+        .rd           (mouse_rd)
+    );
+
+    //
+    // ROM AND BIOS LOAD
+    //
+
+    wire        ioctl_download;
+    wire  [7:0] ioctl_index;
+    wire        ioctl_wr;
+    wire [24:0] ioctl_addr;
+    wire [15:0] ioctl_data;
+    reg         ioctl_wait;
+
+    // ROM-load reset hold: keep the machine in reset while APF streams a slot, and from
+    // power-on until the first load lands, so the CPU never runs without a BIOS. The
+    // BIOS write path sits on the separate reset_sdram.
+    wire        is_downloading;      // APF slot load active (clk_chipset)
+    wire        load_active;         // is_downloading OR the FIFO still draining
+    reg         bios_ever_loaded = 1'b0;
+
+    // Track an APF->core slot stream (requestwrite..allcomplete) on the bridge clock,
+    // then sync into the chipset domain for the loader and reset hold.
     reg         is_downloading_74a = 1'b0;
     reg  [15:0] download_id_74a = 16'd0;
     always @(posedge clk_74a) begin
@@ -1049,160 +1252,9 @@ module core_top (
             bios_ever_loaded <= 1'b1;
     end
 
-    //////////////////////////////////////////////////////////////////
-
-    always @(posedge clk_28_636)
-        clk_14_318 <= ~clk_14_318;   // 14.318 MHz toggle for splash / UART timing
-
-    //////////////////////////////////////////////////////////////////
-
-    logic  biu_done;
-    logic  [7:0] clock_cycle_counter_division_ratio;
-    logic  [7:0] clock_cycle_counter_decrement_value;
-    logic        shift_read_timing;
-    logic  [1:0] ram_read_wait_cycle;
-    logic  [1:0] ram_write_wait_cycle;
-    logic        cycle_accrate;
-    logic  [1:0] clk_select;
-    wire   [1:0] clk_select_next = ((xtctl[3:2] == 2'b00) && ~xtctl[7]) ? cpu_speed_cfg :
-                                   (xtctl[7] ? 2'b11 : xtctl[3:2] - 2'b01);
-
-    always @(posedge clk_chipset, posedge reset)
-    begin
-        if (reset)
-            clk_select <= 2'b00;
-        else if (biu_done)
-            clk_select <= clk_select_next;
-    end
-
-    XT_CE_Generator u_XT_CE_Generator
-    (
-        .clock                              (clk_chipset),
-        .reset                              (reset),
-        .clk_select_load                    (biu_done),
-        .clk_select                         (clk_select_next),
-        .cpu_clk_pin                        (clk_cpu),
-        .cpu_ce_posedge                     (cpu_ce_posedge),
-        .cpu_ce_negedge                     (cpu_ce_negedge),
-        .peripheral_ce                      (peripheral_ce),
-        .cycle_accrate                      (cycle_accrate),
-        .clock_cycle_counter_division_ratio (clock_cycle_counter_division_ratio),
-        .clock_cycle_counter_decrement_value(clock_cycle_counter_decrement_value),
-        .shift_read_timing                  (shift_read_timing),
-        .ram_read_wait_cycle                (ram_read_wait_cycle),
-        .ram_write_wait_cycle               (ram_write_wait_cycle)
-    );
-    //////////////////////////////////////////////////////////////////
-
-    logic reset = 1'b1;
-    logic [15:0] reset_count = 16'h0000;
-    logic reset_sdram = 1'b1;
-    logic [15:0] reset_sdram_count = 16'h0000;
-
-    always @(posedge clk_chipset, posedge reset_wire)
-    begin
-        if (reset_wire)
-        begin
-            reset <= 1'b1;
-            reset_count <= 16'h0000;
-        end
-        else if (reset)
-        begin
-            if (reset_count != 16'hffff)
-            begin
-                reset <= 1'b1;
-                reset_count <= reset_count + 16'h0001;
-            end
-            else
-            begin
-                reset <= 1'b0;
-                reset_count <= reset_count;
-            end
-        end
-        else
-        begin
-            reset <= 1'b0;
-            reset_count <= reset_count;
-        end
-    end
-
-    logic reset_cpu_ff = 1'b1;
-    logic reset_cpu = 1'b1;
-    logic [15:0] reset_cpu_count = 16'h0000;
-
-    always @(negedge clk_chipset, posedge reset)
-    begin
-        if (reset)
-            reset_cpu_ff <= 1'b1;
-        else
-            reset_cpu_ff <= reset;
-    end
-
-    localparam tandy_video_mode = `ENABLE_TANDY_VIDEO;
-    reg hgc_mode = 0;
-
-    always @(negedge clk_chipset, posedge reset)
-    begin
-        if (reset)
-        begin
-            hgc_mode <= `ENABLE_HGC ? (`ENABLE_CGA ? video_1st_cfg : 1'b1) : 1'b0;
-            reset_cpu <= 1'b1;
-            reset_cpu_count <= 16'h0000;
-        end
-        else if (reset_cpu)
-        begin
-            reset_cpu <= reset_cpu_ff;
-            reset_cpu_count <= 16'h0000;
-        end
-        else
-        begin
-            if (reset_cpu_count != 16'h002A)
-            begin
-                reset_cpu <= reset_cpu_ff;
-                reset_cpu_count <= reset_cpu_count + 16'h0001;
-            end
-            else
-            begin
-                reset_cpu <= 1'b0;
-                reset_cpu_count <= reset_cpu_count;
-            end
-        end
-    end
-
-    always @(posedge clk_chipset, posedge reset_sdram_wire)
-    begin
-        if (reset_sdram_wire)
-        begin
-            reset_sdram <= 1'b1;
-            reset_sdram_count <= 16'h0000;
-        end
-        else if (reset_sdram)
-        begin
-            if (reset_sdram_count != 16'hffff)
-            begin
-                reset_sdram <= 1'b1;
-                reset_sdram_count <= reset_sdram_count + 16'h0001;
-            end
-            else
-            begin
-                reset_sdram <= 1'b0;
-                reset_sdram_count <= reset_sdram_count;
-            end
-        end
-        else
-        begin
-            reset_sdram <= 1'b0;
-            reset_sdram_count <= reset_sdram_count;
-        end
-    end
-
-    //
-    /////////////////////   ROM-LOAD (APF -> BIOS FSM)   ////////////////////
-    //
-    // APF streams the BIOS slot into the 0x1xxxxxxx bridge window; data_loader
-    // turns that into 16-bit (addr,data) writes on clk_chipset. APF can't be
-    // backpressured, so a FIFO captures every write; the copier then feeds the
-    // reused BIOS-load FSM as an ioctl stream, honoring its ioctl_wait.
+    // APF streams the BIOS slot into the 0x1xxxxxxx window; data_loader makes 16-bit
+    // (addr,data) writes. APF can't be backpressured, so a FIFO catches every write and
+    // the copier feeds the BIOS FSM as an ioctl stream that honours ioctl_wait.
     wire        dl_wr;
     wire [27:0] dl_addr;
     wire [15:0] dl_data;
@@ -1224,11 +1276,9 @@ module core_top (
         .write_data          (dl_data)
     );
 
-    // Decoupling FIFO (same clk_chipset domain), entry = {xtide, addr[24:0], data[15:0]}.
-    // The slot tag rides in each entry so a following stream cannot retag a draining
-    // tail. 256 deep: generous headroom; the handshake loader keeps pace so it stays
-    // shallow. An overflow would drop a write (and fail POST), but cannot happen
-    // here: the consumer keeps pace and load_active holds reset until it drains.
+    // Decoupling FIFO, entry = {xtide, addr[24:0], data[15:0]}: the slot tag rides each
+    // entry so a later stream can't retag a draining tail. 256 deep; the handshake loader
+    // keeps it shallow and load_active holds reset until it drains, so it never overflows.
     localparam RLF_AW = 8;
     reg  [41:0]     romfifo [0:(1<<RLF_AW)-1];
     reg  [RLF_AW:0] rlf_wptr = 0;
@@ -1273,10 +1323,6 @@ module core_top (
         else if (~ioctl_wait && ~rlf_empty)
             ioctl_wr_r <= 1'b1;
     end
-
-    //
-    ///////////////////////   BIOS LOADER   ////////////////////////////
-    //
 
     reg [4:0]  bios_load_state = 4'h0;
     reg [1:0]  bios_protect_flag;
@@ -1397,10 +1443,8 @@ module core_top (
                     tandy_bios_write    <= select_tandy;
                     ioctl_wait          <= 1'b1;
 
-                    // Handshake: hold the external write asserted until the RAM
-                    // controller reports the access complete (ram_rw_complete), or
-                    // a safety timeout (a hang backstop; a normal write completes in
-                    // a few cycles and must never reach it, else that byte is lost).
+                    // Hold the external write until ram_rw_complete, or a safety
+                    // timeout (a hang backstop; a normal write never reaches it).
                     if (ram_rw_complete || (bios_write_wait_cnt == 8'd63))
                     begin
                         bios_write_n        <= 1'b1;
@@ -1466,12 +1510,10 @@ module core_top (
         end
     end
 
-
-    //////////////////////////////////////////////////////////////////
-
     //
-    // Splash screen
+    // SPLASH
     //
+
     reg splash_off = 1'b1;
     reg [24:0] splash_cnt = 0;
     reg [3:0] splash_cnt2 = 0;
@@ -1579,6 +1621,15 @@ module core_top (
         end
     end
 
+    //
+    // THE MACHINE
+    //
+
+    wire VGA_VBlank_border;
+    wire std_hsyncwidth;
+    wire pause_core_chipset;
+    wire swap_video;
+
     wire [7:0] data_bus;
     wire INTA_n;
     wire [19:0] cpu_ad_out;
@@ -1638,197 +1689,149 @@ module core_top (
             cpu_address <= cpu_address;
     end
 
-    //
-    // Keyboard: controller buttons + docked USB keyboard + virtual keyboard ->
-    // one Set-2 byte stream handed to CHIPSET's KFPS2KB over kb_byte/kb_valid,
-    // paced by kb_ready.
-    //
-    // Mouse mode consumes the D-pad and A/B; X/Y and Select/Start stay mapped keys.
-    wire [15:0] kb_buttons = mousepad ? (cont1_key_s & 16'hFFC0) : cont1_key_s;
-
-    pocket_keyboard u_pocket_keyboard (
-        .clk          (clk_chipset),
-        .reset        (reset),
-        .buttons      (kb_buttons),
-        .gamepad      (gamepad),
-        .osd_active   (osd_active | credits_mode_chip),
-        .vkb_key      (vkb_key),
-        .vkb_stb      (vkb_stb),
-        .cfg_a        (key_a),
-        .cfg_b        (key_b),
-        .cfg_x        (key_x),
-        .cfg_y        (key_y),
-        .cfg_select   (select_key),
-        .cfg_start    (start_key),
-        .cont3_joy    (cont3_joy),
-        .cont3_trig   (cont3_trig),
-        .cont3_key    (cont3_key),
-        .kb_byte      (kb_byte),
-        .kb_valid     (kb_valid),
-        .kb_ready     (kb_ready)
-    );
-
-    //
-    // Mouse: docked USB mouse (cont4_*) -> Microsoft serial mouse byte stream
-    // on CHIPSET's COM1, identification paced by its RTS. In mouse mode the
-    // pad's D-pad and A/B drive it too, quiet while an overlay is up.
-    //
-    wire [5:0] mouse_pad = (mousepad && !(osd_active | credits_mode_chip)) ?
-                           cont1_key_chip[5:0] : 6'd0;
-
-    pocket_mouse u_pocket_mouse (
-        .clk          (clk_chipset),
-        .cont4_joy    (cont4_joy),
-        .cont4_key    (cont4_key),
-        .cont4_trig   (cont4_trig),
-        .pad          (mouse_pad),
-        .rts_n        (mouse_rts_n),
-        .rd           (mouse_rd)
-    );
-
     CHIPSET #(.clk_rate(cur_rate)) u_CHIPSET
-	(
-		.clock                              (clk_chipset),
-		.cpu_ce_posedge                     (cpu_ce_posedge),
-		.cpu_ce_negedge                     (cpu_ce_negedge),
-		.clk_sys                            (clk_chipset),
-		.peripheral_ce                      (peripheral_ce),
-		.clk_select                         (clk_select),
-		.reset                              (reset_cpu),
-		.sdram_reset                        (reset_sdram),
-		.cpu_address                        (cpu_address),
-		.cpu_data_bus                       (cpu_data_bus),
-		.processor_status                   (processor_status),
-		.processor_lock_n                   (lock_n),
-	//	.processor_transmit_or_receive_n    (processor_transmit_or_receive_n),
-		.processor_ready                    (processor_ready),
-		.interrupt_to_cpu                   (interrupt_to_cpu),
-		.splashscreen                       (splashscreen),
-		.status0_clear                      (status0_clear_pulse),
-		.std_hsyncwidth                     (std_hsyncwidth),
-		.composite                          (composite),
-		.video_output                       (video_output_sel),
-		.clk_vga_cga                        (clk_28_636),
-		.enable_cga                         (`ENABLE_CGA),
-		.clk_vga_hgc                        (clk_32_514),
-		.enable_hgc                         (enable_hgc_sel),
-		.hgc_rgb                            (hgc_rgb_sel),
-	//	.de_o                               (VGA_DE),
-		.VGA_R                              (r),
-		.VGA_G                              (g),
-		.VGA_B                              (b),
-		.VGA_HSYNC                          (HSync),
-		.VGA_VSYNC                          (VSync),
-		.VGA_HBlank                         (HBlank),
-		.VGA_VBlank                         (VBlank),
-		.VGA_VBlank_border                  (VGA_VBlank_border),
-	//	.address                            (address),
-		.address_ext                        (bios_access_address),
-		.ext_access_request                 (bios_access_request),
-		.address_direction                  (address_direction),
-		.data_bus                           (data_bus),
-		.data_bus_ext                       (bios_write_data[7:0]),
-	//	.data_bus_direction                 (data_bus_direction),
-		.address_latch_enable               (address_latch_enable),
-	//  .io_channel_check                   (),
-		.io_channel_ready                   (1'b1),
-		.interrupt_request                  (0),    // use?	-> It does not seem to be necessary.
-	//  .io_read_n                          (io_read_n),
-		.io_read_n_ext                      (1'b1),
-	//  .io_read_n_direction                (io_read_n_direction),
-	//  .io_write_n                         (io_write_n),
-		.io_write_n_ext                     (1'b1),
-	//  .io_write_n_direction               (io_write_n_direction),
-	//  .memory_read_n                      (memory_read_n),
-		.memory_read_n_ext                  (1'b1),
-	//  .memory_read_n_direction            (memory_read_n_direction),
-	//  .memory_write_n                     (memory_write_n),
-		.memory_write_n_ext                 (bios_write_n),
-	//  .memory_write_n_direction           (memory_write_n_direction),
-		.dma_request                        (0),    // use?	-> I don't know if it will ever be necessary, at least not during testing.
-		.dma_acknowledge_n                  (dma_acknowledge_n),
-	//  .address_enable_n                   (address_enable_n),
-	//  .terminal_count_n                   (terminal_count_n)
-		.port_b_out                         (port_b_out),
-		.port_c_in                          (port_c_in),
-		.port_b_in                          (port_b_out),
-		.speaker_out                        (speaker_out),
-		.kb_byte                            (kb_byte),
-		.kb_valid                           (kb_valid),
-		.kb_ready                           (kb_ready),
-		.uart_rx                            (mouse_rd),
-		.uart_rts_n                         (mouse_rts_n),
-		.joy_opts                           (joy_opts),           //Joy0-Disabled, Joy0-Type, Joy1-Disabled, Joy1-Type, turbo_sync
-		.joy0                               (swapjoy_cfg ? joy1 : joy0),
-		.joy1                               (swapjoy_cfg ? joy0 : joy1),
-		.joya0                              (swapjoy_cfg ? joya1 : joya0),
-		.joya1                              (swapjoy_cfg ? joya0 : joya1),
-		.jtopl2_snd_e                       (jtopl2_snd_e),
-		.tandy_snd_e                        (tandy_snd_e),
-		.opl2_io                            (xtctl[4] ? 2'b10 : opl2_cfg),
-		.cms_en                             (cms_cfg),
-		.o_cms_l                            (cms_l_snd_e),
-		.o_cms_r                            (cms_r_snd_e),
-		.tandy_video                        (tandy_video_mode),
-		.tandy_bios_flag                    (tandy_bios_flag),
-		.tandy_16_gfx                       (tandy_16_gfx),
-		.tandy_color_16                     (tandy_color_16),
-		.clk_uart                           (clk_uart2_en),
-		.uart2_rx                           (uart_rx),
-		.uart2_tx                           (uart_tx),
-		.uart2_cts_n                        (uart_cts),
-		.uart2_dcd_n                        (uart_dcd),
-		.uart2_dsr_n                        (uart_dsr),
-		.uart2_rts_n                        (uart_rts),
-		.uart2_dtr_n                        (uart_dtr),
-		.enable_sdram                       (1'b1),
-		.initilized_sdram                   (initilized_sdram),
-		.sdram_clock                        (SDRAM_CLK),
-		.sdram_address                      (SDRAM_A),
-		.sdram_cke                          (SDRAM_CKE),
-		.sdram_cs                           (SDRAM_nCS),
-		.sdram_ras                          (SDRAM_nRAS),
-		.sdram_cas                          (SDRAM_nCAS),
-		.sdram_we                           (SDRAM_nWE),
-		.sdram_ba                           (SDRAM_BA),
-		.sdram_dq_in                        (SDRAM_DQ_IN),
-		.sdram_dq_out                       (SDRAM_DQ_OUT),
-		.sdram_dq_io                        (SDRAM_DQ_IO),
-		.sdram_ldqm                         (SDRAM_DQML),
-		.sdram_udqm                         (SDRAM_DQMH),
-		.ems_enabled                        (ems_enabled_sel),
-		.ems_address                        (ems_address_sel),
-		.bios_protect_flag                  (bios_protect_flag),
-		.use_mmc                            (use_mmc),
-		.spi_clk                            (spi_clk),
-		.spi_cs                             (spi_cs),
-		.spi_mosi                           (spi_mosi),
-		.spi_miso                           (spi_miso),
-		.mgmt_readdata                      (mgmt_din),
-		.mgmt_writedata                     (mgmt_dout),
-		.mgmt_address                       (mgmt_addr),
-		.mgmt_write                         (mgmt_wr),
-		.mgmt_read                          (mgmt_rd),
-		.floppy_wp                          (wp_cfg),
-		.fdd_present                        (fdd_present),
-		.fdd_request                        (mgmt_req[7:6]),
-		.ide0_request                       (mgmt_req[2:0]),
-		.xtctl                              (xtctl),
-		.enable_a000h                       (a000h),
-		.wait_count_clk_en                  (cpu_ce_negedge),
-		.ram_read_wait_cycle                (ram_read_wait_cycle),
-		.ram_write_wait_cycle               (ram_write_wait_cycle),
-		.pause_core                         (pause_core_chipset),
-		.cga_hw                             (cga_hw),
-		.cga_scandouble_en                  (cga_scandouble_en),
-		.hercules_hw                        (hercules_hw_sel),
-		.swap_video                         (swap_video),
-		.crt_h_offset                       (status[49:46]),
-		.crt_v_offset                       (status[52:50]),
-		.vsync_width_osd                    (vsync_width_osd),
-		.hsync_width_osd                    (hsync_width_osd),
-		.ram_rw_complete                    (ram_rw_complete)
-	);
+    (
+        .clock                              (clk_chipset),
+        .cpu_ce_posedge                     (cpu_ce_posedge),
+        .cpu_ce_negedge                     (cpu_ce_negedge),
+        .clk_sys                            (clk_chipset),
+        .peripheral_ce                      (peripheral_ce),
+        .clk_select                         (clk_select),
+        .reset                              (reset_cpu),
+        .sdram_reset                        (reset_sdram),
+        .cpu_address                        (cpu_address),
+        .cpu_data_bus                       (cpu_data_bus),
+        .processor_status                   (processor_status),
+        .processor_lock_n                   (lock_n),
+    //  .processor_transmit_or_receive_n    (processor_transmit_or_receive_n),
+        .processor_ready                    (processor_ready),
+        .interrupt_to_cpu                   (interrupt_to_cpu),
+        .splashscreen                       (splashscreen),
+        .status0_clear                      (status0_clear_pulse),
+        .std_hsyncwidth                     (std_hsyncwidth),
+        .composite                          (composite),
+        .video_output                       (video_output_sel),
+        .clk_vga_cga                        (clk_28_636),
+        .enable_cga                         (`ENABLE_CGA),
+        .clk_vga_hgc                        (clk_32_514),
+        .enable_hgc                         (enable_hgc_sel),
+        .hgc_rgb                            (hgc_rgb_sel),
+    //  .de_o                               (VGA_DE),
+        .VGA_R                              (r),
+        .VGA_G                              (g),
+        .VGA_B                              (b),
+        .VGA_HSYNC                          (HSync),
+        .VGA_VSYNC                          (VSync),
+        .VGA_HBlank                         (HBlank),
+        .VGA_VBlank                         (VBlank),
+        .VGA_VBlank_border                  (VGA_VBlank_border),
+    //  .address                            (address),
+        .address_ext                        (bios_access_address),
+        .ext_access_request                 (bios_access_request),
+        .address_direction                  (address_direction),
+        .data_bus                           (data_bus),
+        .data_bus_ext                       (bios_write_data[7:0]),
+    //  .data_bus_direction                 (data_bus_direction),
+        .address_latch_enable               (address_latch_enable),
+    //  .io_channel_check                   (),
+        .io_channel_ready                   (1'b1),
+        .interrupt_request                  (0),    // use? -> It does not seem to be necessary.
+    //  .io_read_n                          (io_read_n),
+        .io_read_n_ext                      (1'b1),
+    //  .io_read_n_direction                (io_read_n_direction),
+    //  .io_write_n                         (io_write_n),
+        .io_write_n_ext                     (1'b1),
+    //  .io_write_n_direction               (io_write_n_direction),
+    //  .memory_read_n                      (memory_read_n),
+        .memory_read_n_ext                  (1'b1),
+    //  .memory_read_n_direction            (memory_read_n_direction),
+    //  .memory_write_n                     (memory_write_n),
+        .memory_write_n_ext                 (bios_write_n),
+    //  .memory_write_n_direction           (memory_write_n_direction),
+        .dma_request                        (0),    // use? -> I don't know if it will ever be necessary, at least not during testing.
+        .dma_acknowledge_n                  (dma_acknowledge_n),
+    //  .address_enable_n                   (address_enable_n),
+    //  .terminal_count_n                   (terminal_count_n)
+        .port_b_out                         (port_b_out),
+        .port_c_in                          (port_c_in),
+        .port_b_in                          (port_b_out),
+        .speaker_out                        (speaker_out),
+        .kb_byte                            (kb_byte),
+        .kb_valid                           (kb_valid),
+        .kb_ready                           (kb_ready),
+        .uart_rx                            (mouse_rd),
+        .uart_rts_n                         (mouse_rts_n),
+        .joy_opts                           (joy_opts),           //Joy0-Disabled, Joy0-Type, Joy1-Disabled, Joy1-Type, turbo_sync
+        .joy0                               (swapjoy_cfg ? joy1 : joy0),
+        .joy1                               (swapjoy_cfg ? joy0 : joy1),
+        .joya0                              (swapjoy_cfg ? joya1 : joya0),
+        .joya1                              (swapjoy_cfg ? joya0 : joya1),
+        .jtopl2_snd_e                       (jtopl2_snd_e),
+        .tandy_snd_e                        (tandy_snd_e),
+        .opl2_io                            (xtctl[4] ? 2'b10 : opl2_cfg),
+        .cms_en                             (cms_cfg),
+        .o_cms_l                            (cms_l_snd_e),
+        .o_cms_r                            (cms_r_snd_e),
+        .tandy_video                        (tandy_video_mode),
+        .tandy_bios_flag                    (tandy_bios_flag),
+        .tandy_16_gfx                       (tandy_16_gfx),
+        .tandy_color_16                     (tandy_color_16),
+        .clk_uart                           (clk_uart2_en),
+        .uart2_rx                           (uart_rx),
+        .uart2_tx                           (uart_tx),
+        .uart2_cts_n                        (uart_cts),
+        .uart2_dcd_n                        (uart_dcd),
+        .uart2_dsr_n                        (uart_dsr),
+        .uart2_rts_n                        (uart_rts),
+        .uart2_dtr_n                        (uart_dtr),
+        .enable_sdram                       (1'b1),
+        .initilized_sdram                   (initilized_sdram),
+        .sdram_clock                        (SDRAM_CLK),
+        .sdram_address                      (SDRAM_A),
+        .sdram_cke                          (SDRAM_CKE),
+        .sdram_cs                           (SDRAM_nCS),
+        .sdram_ras                          (SDRAM_nRAS),
+        .sdram_cas                          (SDRAM_nCAS),
+        .sdram_we                           (SDRAM_nWE),
+        .sdram_ba                           (SDRAM_BA),
+        .sdram_dq_in                        (SDRAM_DQ_IN),
+        .sdram_dq_out                       (SDRAM_DQ_OUT),
+        .sdram_dq_io                        (SDRAM_DQ_IO),
+        .sdram_ldqm                         (SDRAM_DQML),
+        .sdram_udqm                         (SDRAM_DQMH),
+        .ems_enabled                        (ems_enabled_sel),
+        .ems_address                        (ems_address_sel),
+        .bios_protect_flag                  (bios_protect_flag),
+        .use_mmc                            (use_mmc),
+        .spi_clk                            (spi_clk),
+        .spi_cs                             (spi_cs),
+        .spi_mosi                           (spi_mosi),
+        .spi_miso                           (spi_miso),
+        .mgmt_readdata                      (mgmt_din),
+        .mgmt_writedata                     (mgmt_dout),
+        .mgmt_address                       (mgmt_addr),
+        .mgmt_write                         (mgmt_wr),
+        .mgmt_read                          (mgmt_rd),
+        .floppy_wp                          (wp_cfg),
+        .fdd_present                        (fdd_present),
+        .fdd_request                        (mgmt_req[7:6]),
+        .ide0_request                       (mgmt_req[2:0]),
+        .xtctl                              (xtctl),
+        .enable_a000h                       (a000h),
+        .wait_count_clk_en                  (cpu_ce_negedge),
+        .ram_read_wait_cycle                (ram_read_wait_cycle),
+        .ram_write_wait_cycle               (ram_write_wait_cycle),
+        .pause_core                         (pause_core_chipset),
+        .cga_hw                             (cga_hw),
+        .cga_scandouble_en                  (cga_scandouble_en),
+        .hercules_hw                        (hercules_hw_sel),
+        .swap_video                         (swap_video),
+        .crt_h_offset                       (status[49:46]),
+        .crt_v_offset                       (status[52:50]),
+        .vsync_width_osd                    (vsync_width_osd),
+        .hsync_width_osd                    (hsync_width_osd),
+        .ram_rw_complete                    (ram_rw_complete)
+    );
 
     // CHIPSET per-access "done" pulse (COMPLETE_RAM_RW); drives the ROM-load FSM.
     wire        ram_rw_complete;
@@ -1867,41 +1870,56 @@ module core_top (
     wire s6_3_mux;
     wire [2:0] SEGMENT;
 
-    i8088 B1 	
-	(
-		.CORE_CLK(clk_100),
-		.CLK(clk_cpu),
+    i8088 B1    
+    (
+        .CORE_CLK(clk_100),
+        .CLK(clk_cpu),
 
-		.RESET(reset_cpu),
-		.READY(processor_ready && ~pause_core),
-		.NMI(1'b0),
-		.INTR(interrupt_to_cpu),
+        .RESET(reset_cpu),
+        .READY(processor_ready && ~pause_core),
+        .NMI(1'b0),
+        .INTR(interrupt_to_cpu),
 
-		.ad_out(cpu_ad_out),
-		.dout(cpu_data_bus),
-		.din(data_bus),
+        .ad_out(cpu_ad_out),
+        .dout(cpu_data_bus),
+        .din(data_bus),
 
-		.lock_n(lock_n),
-		.s6_3_mux(s6_3_mux),
-		.s2_s0_out(processor_status),
-		.SEGMENT(SEGMENT),
+        .lock_n(lock_n),
+        .s6_3_mux(s6_3_mux),
+        .s2_s0_out(processor_status),
+        .SEGMENT(SEGMENT),
 
-		.biu_done(biu_done),
-		.cycle_accrate(cycle_accrate),
-		.clock_cycle_counter_division_ratio(clock_cycle_counter_division_ratio),
-		.clock_cycle_counter_decrement_value(clock_cycle_counter_decrement_value),
-		.shift_read_timing(shift_read_timing)
-	);
+        .biu_done(biu_done),
+        .cycle_accrate(cycle_accrate),
+        .clock_cycle_counter_division_ratio(clock_cycle_counter_division_ratio),
+        .clock_cycle_counter_decrement_value(clock_cycle_counter_decrement_value),
+        .shift_read_timing(shift_read_timing)
+    );
 
     //
-    ////////////////////////////  AUDIO  ///////////////////////////////////
+    // MACHINE PORT STUBS
+    //
+
+    wire uart_tx, uart_rts, uart_dtr;   // CHIPSET COM2 outputs, no external pins
+    wire uart_rx  = 1'b1;
+    wire uart_cts = 1'b1;
+    wire uart_dsr = 1'b1;
+    wire uart_dcd = 1'b1;
+
+    // SPI/MMC storage path unused; the managed-SD ide.v backend is used instead.
+    wire [1:0] use_mmc = 2'b00;
+    wire spi_clk, spi_cs, spi_mosi;     // CHIPSET outputs, no external pins
+    wire spi_miso = 1'b0;
+
+    //
+    // AUDIO
     //
 
     wire [15:0] cms_l_snd_e;
     wire [16:0] cms_l_snd = {cms_l_snd_e[15],cms_l_snd_e};
     wire [15:0] cms_r_snd_e;
     wire [16:0] cms_r_snd = {cms_r_snd_e[15],cms_r_snd_e};
-	 
+     
     wire [15:0] jtopl2_snd_e;
     wire [16:0] jtopl2_snd = {jtopl2_snd_e[15], jtopl2_snd_e};
     wire [10:0] tandy_snd_e;
@@ -1959,10 +1977,8 @@ module core_top (
         cmp_r <= compr(out_r);
     end
 
-    // ---- Audio: filter chain + I2S (Pocket audio codec) ----
-    // audio_mixer stands in for the MiSTer framework back end: the default
-    // anti-aliasing low-pass + DC blocker (the raw mix carries square-wave
-    // harmonics past Nyquist), the AUDIO_MIX crossfeed, and the codec clocks.
+    // Filter chain + I2S: audio_mixer supplies the anti-aliasing low-pass + DC blocker
+    // (the raw mix has square-wave harmonics past Nyquist), the crossfeed, and codec clocks.
     wire [15:0] audio_l = pause_core ? 16'd0 : (boost_cfg ? cmp_l : out_l);
     wire [15:0] audio_r = pause_core ? 16'd0 : (boost_cfg ? cmp_r : out_r);
 
@@ -1981,74 +1997,13 @@ module core_top (
     );
 
     //
-    ////////////////////////////  UART  ///////////////////////////////////
+    // VIDEO AND OSD
     //
-    // COM1 (serial mouse) and COM2 live inside CHIPSET; their clock enable is generated
-    // here. COM2's inputs are tied to the idle/marking level (no external serial wiring
-    // on the Pocket).
 
-    logic clk_uart_ff_1;
-    logic clk_uart_ff_2;
-    logic clk_uart_ff_3;
-    logic clk_uart_en;
-    logic clk_uart2_en;
-    logic [2:0] clk_uart2_counter;
-
-    always @(posedge clk_chipset)
-    begin
-        clk_uart_ff_1 <= clk_14_318;
-        clk_uart_ff_2 <= clk_uart_ff_1;
-        clk_uart_ff_3 <= clk_uart_ff_2;
-        clk_uart_en   <= ~clk_uart_ff_3 & clk_uart_ff_2;
-    end
-
-    always @(posedge clk_chipset)
-    begin
-        if (clk_uart_en)
-        begin
-            if (3'd7 != clk_uart2_counter)
-            begin
-                clk_uart2_counter <= clk_uart2_counter +3'd1;
-                clk_uart2_en <= 1'b0;
-            end
-            else
-            begin
-                clk_uart2_counter <= 3'd0;
-                clk_uart2_en <= 1'b1;
-            end
-        end
-        else
-        begin
-            clk_uart2_counter <= clk_uart2_counter;
-            clk_uart2_en <= 1'b0;
-        end
-    end
-
-    wire uart_tx, uart_rts, uart_dtr;   // CHIPSET COM2 outputs, no external pins
-    wire uart_rx  = 1'b1;
-    wire uart_cts = 1'b1;
-    wire uart_dsr = 1'b1;
-    wire uart_dcd = 1'b1;
-
-    //
-    ///////////////////////   MMC     ///////////////////////
-    //
-    // SPI/MMC storage path unused; the managed-SD ide.v backend is used instead.
-    wire [1:0] use_mmc = 2'b00;
-    wire spi_clk, spi_cs, spi_mosi;     // CHIPSET outputs, no external pins
-    wire spi_miso = 1'b0;
-
-    //
-    ///////////////////////   VIDEO   ///////////////////////
-    //
-    // Lean CGA/HGC -> Pocket scaler: the Pocket scaler does the scaling and filtering.
-    // DE/porches follow CHIPSET's CGA blanking as-is; the Hercules raster is reshaped
-    // into the fixed canvas below.
-    //
-    // r/g/b/HSync/VSync/HBlank/VBlank leave CHIPSET on the displayed card's dot-clock
-    // domain (clk_28_636 CGA, clk_32_514 HGC). clk_pix is the matching half-rate
-    // sibling off the same PLL, phase-aligned and muxed together with it by the
-    // switch sequencer above, so it samples them cleanly, one pixel per edge.
+    // CGA/HGC picture -> Pocket scaler (which does the scaling/filtering). CGA blanking
+    // passes through; the Hercules raster is reshaped into the fixed canvas below.
+    // r/g/b + syncs leave CHIPSET on the dot clock; clk_pix is its half-rate sibling,
+    // so it samples one pixel per edge.
 
     wire        HBlank;
     wire        HSync;
@@ -2057,10 +2012,8 @@ module core_top (
     wire [5:0]  r, g, b;
     wire        tandy_16_gfx, tandy_color_16;   // CHIPSET Tandy-video outputs (unused)
 
-    // Monochrome-monitor palette (Display setting). palette_cfg 0 = full colour; 1-7
-    // tint the pixel by its weighted luma (green/amber/B&W/red/blue/fuchsia/purple).
-    // Combinational, so the lean clk_pix output needs no extra pixel clock/enable and
-    // adds no latency. r/g/b are 6-bit; widen to 8 for the luma weights.
+    // Monochrome-monitor palette (Display setting): palette_cfg 0 = full colour, 1-7
+    // tint by weighted luma. Combinational (no extra clock/latency); r/g/b widened to 8.
     wire [7:0]  pr = {r, 2'b00};
     wire [7:0]  pg = {g, 2'b00};
     wire [7:0]  pb = {b, 2'b00};
@@ -2081,20 +2034,10 @@ module core_top (
         endcase
     end
 
-    // Hercules canvas: the guest programs arbitrary 6845 rasters (custom sizes,
-    // rows that straddle the hsync edge, modes without vertical blanking), so the
-    // display side presents one fixed 720x350 window and pads the rest black,
-    // like a fixed-raster monitor. Each line the window runs 720 dots from the
-    // guest's active start (a row cannot straddle its own start); each frame it
-    // runs 350 lines opening CANVAS_VSKIP lines after the vsync fall (the one
-    // vertical event every mode generates). The scaler needs every DE line
-    // bit-identical, so vertical state only moves at the end of a line's dot
-    // run, never at a line start where a registered value would lag by a dot.
-    //
-    // CANVAS_VSKIP must equal the scaler's measured frame anchor: it places DE
-    // lines by a vsync-anchored line counter, not by arrival, so a window that
-    // opens early shows its first lines wrapped to the frame bottom. A wrapped
-    // strip along the bottom edge means this constant is off by its height.
+    // Hercules canvas: the guest programs arbitrary 6845 rasters, so present one fixed
+    // 720x350 window (720 dots from the guest active start each line, 350 lines opening
+    // CANVAS_VSKIP lines after the vsync fall) and pad the rest black. CANVAS_VSKIP must
+    // equal the scaler's frame anchor, or the window's top lines wrap to the bottom.
     localparam CANVAS_W = 10'd720;
     localparam CANVAS_H = 10'd350;
     localparam CANVAS_VSKIP = 5'd16; // lines from the vsync fall to the window top
@@ -2140,10 +2083,8 @@ module core_top (
     // source raster on CGA (cga.v already normalizes every CGA mode to 640x200).
     wire vid_hb  = hgc_shown_pix ? canvas_hb : HBlank;
     wire vid_vb  = hgc_shown_pix ? canvas_vb : VBlank;
-    // Canvas padding: inside the window but outside the guest's active raster.
-    // The window's first line (v_run still at its load value) is sacrificial
-    // and forced black: the scaler captures the frame's first DE line
-    // unreliably, so no content may depend on it.
+    // Canvas padding (inside the window, outside the guest raster). The window's first
+    // line is sacrificial/black: the scaler captures the first DE line unreliably.
     wire vid_pad = hgc_shown_pix & (HBlank | VBlank | (v_run == CANVAS_H));
 
     wire        credits_hb, credits_vb;
@@ -2182,10 +2123,9 @@ module core_top (
         .rgb_out    ( credits_rgb )
     );
 
-    // OSD overlay raster counters: osd_hcnt = pixel within the active line; the
-    // line index is the canvas countdown when the canvas is shown (offset past
-    // the sacrificial first line), else an hblank-fall counter parked at -1 so
-    // the first fall, which lands after VBlank ends, counts line 0.
+    // OSD raster counters: osd_hcnt = pixel in the active line; the line index is the
+    // canvas countdown on Hercules, else an hblank-fall counter parked at -1 so the
+    // first fall (after VBlank) is line 0.
     reg osd_hb_d = 1'b0;
     always @(posedge clk_pix) begin
         osd_hb_d <= vid_hb;
@@ -2201,9 +2141,8 @@ module core_top (
     assign osd_raster_w = pix_sel ? CANVAS_W : 10'd640;
     assign osd_raster_h = pix_sel ? (CANVAS_H - 10'd1) : 10'd200;
 
-    // Scaler slot (video.json): 0 = CGA 640x200, 1 = the Hercules canvas. The
-    // canvas absorbs every guest-programmed HGC geometry, so the slot follows
-    // only the displayed card.
+    // Scaler slot (video.json): 0 = CGA 640x200, 1 = Hercules canvas; follows only the
+    // displayed card.
     wire [2:0] vid_slot = hgc_shown_pix ? 3'd1 : 3'd0;
 
     // Framebuffer palette index -> opaque colour; index 0 is transparent and
@@ -2236,12 +2175,9 @@ module core_top (
     reg         hs_d    = 1'b0;
     reg         vs_d    = 1'b0;
 
-    // The credits overlay registers HB/VB/RGB by one clk_pix; stage HSync/VSync once
-    // (hs_d/vs_d) so sync stays aligned with the overlaid pixels. Whenever DE is
-    // low the bus carries the end-of-line word naming the scaler slot ([23:13] =
-    // slot, function code [2:0] = 0), held through the whole blanking interval:
-    // an all-zero blanking bus is itself a slot-0 command and the last word in a
-    // frame wins. Its function bits are zero, so it is inert during VS.
+    // Stage HSync/VSync one clk_pix (hs_d/vs_d) to match the credits overlay's 1-cycle
+    // HB/VB/RGB latency. While DE is low the bus carries the scaler-slot word ([23:13]),
+    // held through all of blanking: a zero bus is itself slot 0 and the last word wins.
     wire vid_de_now = ~(credits_hb | credits_vb) & ~vid_blank_pix;
     always @(posedge clk_pix)
     begin
@@ -2261,5 +2197,4 @@ module core_top (
     assign video_skip         = 1'b0;
     assign video_rgb_clock    = clk_pix;
     assign video_rgb_clock_90 = clk_pix_90;
-
 endmodule
