@@ -1019,48 +1019,31 @@ module core_top (
     end
     wire       interact_reset;
     wire       osd_open_req;
-    wire [1:0] cpu_speed_cfg;
-    wire [1:0] bios_wr_cfg;
     wire [1:0] wp_cfg;
-    wire [1:0] opl2_cfg;
-    wire [1:0] boost_cfg;
-    wire [1:0] spk_vol_cfg;
-    wire [1:0] stereo_mix_cfg;
-    wire       cms_cfg;
-    wire       ems_en_cfg;
-    wire [1:0] ems_frame_cfg;
-    wire       a000_en_cfg;
-    wire       video_1st_cfg;
-    // The OSD-driven display palette, synced into the clk_pix video domain for the output tint.
     wire [2:0] palette_cfg;
+
+    // osd_* are in the clk_chipset domain (clk_pico is a gated clk_chipset).
+    wire [1:0] cpu_speed_cfg  = osd_cpu_speed;
+    wire [1:0] bios_wr_cfg    = osd_bios_wr;
+    wire [1:0] opl2_cfg       = osd_opl2;
+    wire [1:0] boost_cfg      = osd_boost;
+    wire [1:0] spk_vol_cfg    = osd_spk_vol;
+    wire [1:0] stereo_mix_cfg = osd_stereo;
+    wire       cms_cfg        = osd_cms;
+    wire       ems_en_cfg     = osd_ems;
+    wire [1:0] ems_frame_cfg  = osd_ems_frame;
+    wire       a000_en_cfg    = osd_a000;
+    wire       video_1st_cfg  = osd_video_1st;
     synch_3              s_interact_reset (|interact_reset_delay, interact_reset, clk_chipset);
     synch_3              s_osd_open       (|osd_open_delay,    osd_open_req,  clk_chipset);
-    synch_3 #(.WIDTH(2)) s_cpu_speed_cfg  (osd_cpu_speed,     cpu_speed_cfg, clk_chipset);
-    synch_3 #(.WIDTH(2)) s_bios_wr_cfg    (osd_bios_wr,       bios_wr_cfg,   clk_chipset);
     synch_3 #(.WIDTH(2)) s_wp_cfg         (wp_cfg_74a,        wp_cfg,        clk_chipset);
-    synch_3 #(.WIDTH(2)) s_opl2_cfg       (osd_opl2,          opl2_cfg,      clk_chipset);
-    synch_3 #(.WIDTH(2)) s_boost_cfg      (osd_boost,         boost_cfg,     clk_chipset);
-    synch_3 #(.WIDTH(2)) s_spk_vol_cfg    (osd_spk_vol,       spk_vol_cfg,   clk_chipset);
-    synch_3 #(.WIDTH(2)) s_stereo_cfg     (osd_stereo,        stereo_mix_cfg, clk_chipset);
-    synch_3              s_cms_cfg        (osd_cms,           cms_cfg,       clk_chipset);
-    synch_3              s_composite_cfg  (osd_composite,     composite_cfg, clk_chipset);
-    synch_3              s_ems_en_cfg     (osd_ems,           ems_en_cfg,    clk_chipset);
-    synch_3 #(.WIDTH(2)) s_ems_frame_cfg  (osd_ems_frame,     ems_frame_cfg, clk_chipset);
-    synch_3              s_a000_en_cfg    (osd_a000,          a000_en_cfg,   clk_chipset);
-    synch_3 #(.WIDTH(2)) s_joy1_cfg       (osd_joy1,          joy1_cfg,      clk_chipset);
-    synch_3 #(.WIDTH(2)) s_joy2_cfg       (osd_joy2,          joy2_cfg,      clk_chipset);
-    synch_3              s_swapjoy_cfg    (osd_swapjoy,       swapjoy_cfg,   clk_chipset);
-    synch_3              s_syncjoy_cfg    (osd_syncjoy,       syncjoy_cfg,   clk_chipset);
-    synch_3              s_video_1st_cfg  (osd_video_1st,     video_1st_cfg, clk_chipset);
-    synch_3              s_cga_gfx_cfg    (osd_cga_gfx,       cga_gfx_cfg,   clk_chipset);
-    synch_3              s_hgc_gfx_cfg    (osd_hgc_gfx,       hgc_gfx_cfg,   clk_chipset);
     synch_3 #(.WIDTH(8)) s_key_a          (key_a_74a,         key_a,         clk_chipset);
     synch_3 #(.WIDTH(8)) s_key_b          (key_b_74a,         key_b,         clk_chipset);
     synch_3 #(.WIDTH(8)) s_key_x          (key_x_74a,         key_x,         clk_chipset);
     synch_3 #(.WIDTH(8)) s_key_y          (key_y_74a,         key_y,         clk_chipset);
-    synch_3 #(.WIDTH(2))  s_gamepad       (gamepad_74a,       gamepad_mode,  clk_chipset);
-    synch_3 #(.WIDTH(8))  s_select_cfg    (select_cfg_74a,    select_cfg,    clk_chipset);
-    synch_3 #(.WIDTH(8))  s_start_cfg     (start_cfg_74a,     start_cfg,     clk_chipset);
+    synch_3 #(.WIDTH(2)) s_gamepad        (gamepad_74a,       gamepad_mode,  clk_chipset);
+    synch_3 #(.WIDTH(8)) s_select_cfg     (select_cfg_74a,    select_cfg,    clk_chipset);
+    synch_3 #(.WIDTH(8)) s_start_cfg      (start_cfg_74a,     start_cfg,     clk_chipset);
     synch_3 #(.WIDTH(16)) s_cont1_chip    (cont1_key_s,       cont1_key_chip, clk_chipset);
     synch_3 #(.WIDTH(16)) s_cont2_chip    (cont2_key_s,       cont2_key_chip, clk_chipset);
     synch_3 #(.WIDTH(32)) s_cont1_joy     (cont1_joy,         cont1_joy_chip, clk_chipset);
@@ -1093,12 +1076,12 @@ module core_top (
 
     // Game-port options from the settings OSD: [4]=Sync-to-CPU turbo timing, [3:2]=Joystick 2,
     // [1:0]=Joystick 1; each 2-bit field is 0=Analog, 1=Digital, 2=Disabled.
-    wire [1:0]  joy1_cfg, joy2_cfg;
-    wire        swapjoy_cfg, syncjoy_cfg;
+    wire [1:0]  joy1_cfg = osd_joy1, joy2_cfg = osd_joy2;
+    wire        swapjoy_cfg = osd_swapjoy, syncjoy_cfg = osd_syncjoy;
     wire [4:0]  joy_opts = {syncjoy_cfg, joy2_cfg, joy1_cfg};
 
-    wire composite_cfg;   // CGA composite colour decode (settings bank, 0x7C)
-    wire cga_gfx_cfg, hgc_gfx_cfg;   // CGA/Hercules Graphics I/O enables (settings bank; 0 = Yes)
+    wire composite_cfg = osd_composite;   // CGA composite colour decode (settings bank, 0x7C)
+    wire cga_gfx_cfg = osd_cga_gfx, hgc_gfx_cfg = osd_hgc_gfx;   // CGA/HGC graphics I/O enables (0 = Yes)
     wire composite = composite_cfg | xtctl[0];
     wire [1:0] scale = status[2:1];
     wire a000h = `ENABLE_A000_UMB ? (a000_en_cfg & ~xtctl[6]) : 1'b0;
