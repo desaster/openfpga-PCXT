@@ -10,3 +10,5 @@ set_global_assignment -name VERILOG_MACRO "ENABLE_OPL2=1"
 set_global_assignment -name VERILOG_MACRO "ENABLE_CMS=1"
 set_global_assignment -name VERILOG_MACRO "ENABLE_EMS=1"
 set_global_assignment -name VERILOG_MACRO "ENABLE_A000_UMB=1"
+# Chipset clock rate in Hz: drives cur_rate (Verilog) and the softcore clock (firmware, /6).
+set_global_assignment -name VERILOG_MACRO "CHIPSET_HZ=42954545"

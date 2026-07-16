@@ -12,8 +12,10 @@
 // Scancodes are Set-2 (KFPS2KB converts Set-2 -> XT).
 //
 
-module pocket_keyboard (
-    input        clk,          // clk_chipset (50 MHz)
+module pocket_keyboard #(
+    parameter clk_rate = 28'd50000000   // clk frequency in Hz, sets the typematic timing
+) (
+    input        clk,          // clk_chipset
     input        reset,
     input [15:0] buttons,      // cont1_key
     input        gamepad,      // 1 = joystick mode: buttons drive the game port, not keys
@@ -205,8 +207,8 @@ module pocket_keyboard (
     // delay/rate timer. Toggle-lock keys are excluded so a held lock cannot flip
     // repeatedly.
     //
-    localparam [24:0] REP_DELAY = 25'd25_000_000;  // ~500 ms at 50 MHz
-    localparam [24:0] REP_RATE  = 25'd5_000_000;   // ~100 ms -> ~10 cps
+    localparam [24:0] REP_DELAY = clk_rate / 2;    // ~500 ms before the first repeat
+    localparam [24:0] REP_RATE  = clk_rate / 10;   // ~100 ms -> ~10 cps
     reg  [7:0]  rep_code;
     reg         rep_ext;
     reg         rep_hold;

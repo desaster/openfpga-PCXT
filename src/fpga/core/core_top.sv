@@ -59,6 +59,9 @@
 `ifndef ENABLE_EMS
 `define ENABLE_EMS 0
 `endif
+`ifndef CHIPSET_HZ
+`define CHIPSET_HZ 42954545
+`endif
 module core_top (
 
     //
@@ -277,16 +280,16 @@ module core_top (
 
     wire pll_locked;             // system PLL lock
 
-    wire clk_100;                // 100 MHz, i8088 core
+    wire clk_core;               // 85.909 MHz, i8088 core
     wire clk_28_636;             // CGA dot clock
     wire clk_32_514;             // HGC dot clock (x2)
     wire clk_cpu;                // 8088 pin clock (gated)
     logic cpu_ce_posedge;        // CPU clock-enable, rising
     logic cpu_ce_negedge;        // CPU clock-enable, falling
     logic peripheral_ce;         // peripheral clock-enable
-    wire clk_chipset;            // 50 MHz, main domain
+    wire clk_chipset;            // 42.95 MHz, main domain
 
-    localparam [27:0] cur_rate = 28'd50000000; // chipset clock rate, Hz
+    localparam [27:0] cur_rate = `CHIPSET_HZ;   // chipset clock rate, Hz (3 x 14.31818 MHz)
 
     wire clk_sdram_ph;           // SDRAM pin clock, phase-shifted
     wire clk_pix_cga;            // CGA pixel
@@ -295,33 +298,26 @@ module core_top (
     wire clk_pix_hgc_90;         // HGC pixel, 90 deg
     wire clk_pix;                // selected pixel, video out
     wire clk_pix_90;             // selected pixel, 90 deg
-    wire pll_video_locked;       // CGA PLL lock
+    wire pll_video_locked = 1'b1; // CGA on the system PLL; no separate lock
     wire pll_video_hgc_locked;   // HGC PLL lock
 
-    // System PLL: 50 MHz (chipset + SDRAM ctrl), 100 MHz (CPU), 50 MHz@ps (dram_clk).
+    // System PLL: chipset 42.95, core 85.9 (2:1), dram 42.95@180, CGA dot 28.64,
+    // pixel 14.32 (+90) MHz. One VCO, so the CPU stays phase-locked to the CGA beam.
     pll pll
     (
         .refclk   (clk_74a),
         .rst      (1'b0),
         .outclk_0 (clk_chipset),
-        .outclk_1 (clk_100),
+        .outclk_1 (clk_core),
         .outclk_2 (clk_sdram_ph),
+        .outclk_3 (clk_28_636),
+        .outclk_4 (clk_pix_cga),
+        .outclk_5 (clk_pix_cga_90),
         .locked   (pll_locked)
     );
 
-    // CGA video PLL: 28.636 MHz (CGA dot clock), 14.318 MHz pixel + 90-deg sibling.
-    pll_video pll_video
-    (
-        .refclk   (clk_74a),
-        .rst      (1'b0),
-        .outclk_0 (clk_28_636),
-        .outclk_1 (clk_pix_cga),
-        .outclk_2 (clk_pix_cga_90),
-        .locked   (pll_video_locked)
-    );
-
     // Hercules video PLL: 32.514 MHz (HGC dot clock x2), 16.257 MHz pixel + 90-deg
-    // sibling. From clk_74b: pll / pll_video already hold both clk_74a PLL sites.
+    // sibling. From clk_74b: the system pll occupies a clk_74a fractional-PLL site.
     generate if (`ENABLE_HGC) begin : gen_pll_video_hgc
     pll_video_hgc pll_video_hgc
     (
@@ -431,7 +427,7 @@ module core_top (
     reg         pix_sel   = 1'b0;   // 0 = CGA pixel pair, 1 = HGC pixel pair
     reg         vid_blank = 1'b0;   // forces DE low across the clock switch
     reg  [21:0] pix_switch_cnt = 22'd0;
-    localparam  PIX_SWITCH_CYCLES = 22'd4000000;   // 80 ms: ~2 frames each side of the flip
+    localparam  PIX_SWITCH_CYCLES = (cur_rate / 25) * 2;   // ~80 ms: 2 frames each side of the flip
     always @(posedge clk_chipset) begin
         if (pix_switch_cnt != 22'd0) begin
             pix_switch_cnt <= pix_switch_cnt - 22'd1;
@@ -1144,7 +1140,7 @@ module core_top (
     // drop out (they drive the mouse); X/Y and Select/Start stay mapped keys.
     wire [15:0] kb_buttons = mousepad ? (cont1_key_s & 16'hFFC0) : cont1_key_s;
 
-    pocket_keyboard u_pocket_keyboard (
+    pocket_keyboard #(.clk_rate(cur_rate)) u_pocket_keyboard (
         .clk          (clk_chipset),
         .reset        (reset),
         .buttons      (kb_buttons),
@@ -1173,7 +1169,7 @@ module core_top (
     wire [5:0] mouse_pad = (mousepad && !(osd_active | credits_mode_chip)) ?
                            cont1_key_chip[5:0] : 6'd0;
 
-    pocket_mouse u_pocket_mouse (
+    pocket_mouse #(.clk_rate(cur_rate)) u_pocket_mouse (
         .clk          (clk_chipset),
         .cont4_joy    (cont4_joy),
         .cont4_key    (cont4_key),
@@ -1820,7 +1816,7 @@ module core_top (
     wire        initilized_sdram;
 
     assign SDRAM_CLK  = clk_chipset;    // controller clock fed into the chipset
-    assign dram_clk   = clk_sdram_ph;   // device clock, phase-shifted 50 MHz
+    assign dram_clk   = clk_sdram_ph;   // device clock, phase-shifted 42.95 MHz
     assign dram_cke   = SDRAM_CKE;
     assign dram_a     = SDRAM_A;
     assign dram_ba    = SDRAM_BA;
@@ -1838,7 +1834,7 @@ module core_top (
 
     i8088 B1    
     (
-        .CORE_CLK(clk_100),
+        .CORE_CLK(clk_core),
         .CLK(clk_cpu),
 
         .RESET(reset_cpu),

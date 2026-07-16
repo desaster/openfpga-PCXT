@@ -4,8 +4,11 @@
 #include "vkb_layout.h"
 #include "vkb_ui.h"
 
-// D-pad auto-repeat timing, in cycles (the CPU runs at clk_sys / 6).
-#define CLK_FREQ      8333333u
+// D-pad auto-repeat timing, in cycles (the softcore runs at clk_chipset / 6).
+#ifndef CHIPSET_HZ
+#define CHIPSET_HZ 42954545u
+#endif
+#define CLK_FREQ      (CHIPSET_HZ / 6u)
 #define REPEAT_DELAY  (CLK_FREQ / 2)  // hold this long before the cursor repeats
 #define REPEAT_RATE   (CLK_FREQ / 10) // then step at ~10 Hz
 #define MOVE_COOLDOWN (CLK_FREQ / 25) // debounce between moves

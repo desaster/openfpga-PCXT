@@ -4,8 +4,10 @@
 // the driver asserts RTS, then three-byte movement packets at 1200 baud.
 //
 
-module pocket_mouse (
-    input         clk,          // clk_chipset (50 MHz)
+module pocket_mouse #(
+    parameter clk_rate = 28'd50000000   // clk frequency in Hz, sets the baud/tick divisors
+) (
+    input         clk,          // clk_chipset
     input  [31:0] cont4_joy,    // docked USB: buttons [23:16], X delta [15:0]
     input  [15:0] cont4_key,    // docked USB: report counter
     input  [15:0] cont4_trig,   // docked USB: Y delta
@@ -87,7 +89,7 @@ module pocket_mouse (
     // at a fixed rate (tuned on hardware); A and B act as the left and right
     // buttons alongside the docked mouse's.
     //
-    localparam [17:0] PAD_DIV = 18'd249_999;   // 50 MHz / 200 counts per second, minus one
+    localparam [17:0] PAD_DIV = clk_rate / 200 - 1;   // 200 counts per second, minus one
 
     reg [17:0] pad_div = 18'd0;
     wire       pad_tick = (pad_div == 18'd0) && (pad[3:0] != 4'd0);
@@ -103,7 +105,7 @@ module pocket_mouse (
     // delta bits. Bit 7 is 1 on every byte, so an 8-bit read sees a stop bit
     // in its place.
     //
-    localparam [15:0] BAUDDIV = 16'd41665;   // 50 MHz / 1200 baud, minus one
+    localparam [15:0] BAUDDIV = clk_rate / 1200 - 1;   // 1200 baud, minus one
 
     // 'M' identification, led by 20 bit times of idle line: the power-up
     // settle a driver waits out after asserting RTS.

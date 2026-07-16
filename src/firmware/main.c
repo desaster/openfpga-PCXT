@@ -7,8 +7,11 @@
 #include "vkb_ui.h"
 
 // The OSD runs from a periodic timer interrupt (see irq() and start.S) so blocking disk
-// transfers cannot starve it. ~1 ms at the 8.33 MHz softcore clock.
-#define TIMER_PERIOD 8333u
+// transfers cannot starve it. ~1 ms at the softcore clock (clk_chipset / 6).
+#ifndef CHIPSET_HZ
+#define CHIPSET_HZ 42954545u
+#endif
+#define TIMER_PERIOD (CHIPSET_HZ / 6u / 1000u)
 
 extern void timer_start(uint32_t cycles);
 extern void irq_mask(uint32_t mask);

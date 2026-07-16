@@ -23,8 +23,8 @@ module XT_CE_Generator (
     output  logic   [1:0]   ram_write_wait_cycle
 );
 
-    localparam logic [8:0] PERIPHERAL_CE_NUM = 9'd21;
-    localparam logic [8:0] PERIPHERAL_CE_DEN = 9'd440;
+    localparam logic [8:0] PERIPHERAL_CE_NUM = 9'd1;
+    localparam logic [8:0] PERIPHERAL_CE_DEN = 9'd18;
 
     logic   [1:0]   active_clk_select;
     logic   [8:0]   cpu_phase_acc;
@@ -47,30 +47,32 @@ module XT_CE_Generator (
         shift_read_timing = 1'b0;
         ram_read_wait_cycle = 2'd0;
         ram_write_wait_cycle = 2'd0;
-        cpu_edge_num = 9'd21;
-        cpu_edge_den = 9'd110;
+        cpu_edge_num = 9'd2;
+        cpu_edge_den = 9'd9;
 
         case (active_clk_select)
             2'b00:
             begin
-                cpu_edge_num = 9'd21;
-                cpu_edge_den = 9'd110;
+                cpu_edge_num = 9'd2;
+                cpu_edge_den = 9'd9;
+                clock_cycle_counter_division_ratio = 8'd6 - 8'd1;
+                clock_cycle_counter_decrement_value = 8'd7;
             end
 
             2'b01:
             begin
-                cpu_edge_num = 9'd63;
-                cpu_edge_den = 9'd220;
-                clock_cycle_counter_division_ratio = 8'd2 - 8'd1;
-                clock_cycle_counter_decrement_value = 8'd3;
+                cpu_edge_num = 9'd1;
+                cpu_edge_den = 9'd3;
+                clock_cycle_counter_division_ratio = 8'd4 - 8'd1;
+                clock_cycle_counter_decrement_value = 8'd7;
             end
 
             2'b10:
             begin
-                cpu_edge_num = 9'd21;
-                cpu_edge_den = 9'd55;
-                clock_cycle_counter_division_ratio = 8'd10 - 8'd1;
-                clock_cycle_counter_decrement_value = 8'd21;
+                cpu_edge_num = 9'd4;
+                cpu_edge_den = 9'd9;
+                clock_cycle_counter_division_ratio = 8'd9 - 8'd1;
+                clock_cycle_counter_decrement_value = 8'd22;
             end
 
             2'b11:
@@ -78,7 +80,7 @@ module XT_CE_Generator (
                 cpu_edge_num = 9'd1;
                 cpu_edge_den = 9'd1;
                 cycle_accrate = 1'b0;
-                clock_cycle_counter_decrement_value = 8'd5;
+                clock_cycle_counter_decrement_value = 8'd6;
                 shift_read_timing = 1'b1;
                 ram_read_wait_cycle = 2'd1;
             end

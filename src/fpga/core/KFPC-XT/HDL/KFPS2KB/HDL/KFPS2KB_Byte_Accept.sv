@@ -6,7 +6,9 @@
 // guest reads the keycode, so no byte is offered during the PB7 acknowledge, where
 // clear_keycode priority would drop it. Bursts are paced, not flushed. No framing/parity.
 //
-module KFPS2KB_Byte_Accept (
+module KFPS2KB_Byte_Accept #(
+    parameter clk_rate = 28'd50000000
+) (
     input   logic           clock,
     input   logic           reset,
 
@@ -21,7 +23,7 @@ module KFPS2KB_Byte_Accept (
     output  reg             recieved_flag,
     output  logic           error_flag
 );
-    localparam [15:0] PACE = 16'd44000;   // ~880 us at 50 MHz per byte
+    localparam [15:0] PACE = clk_rate / 1136;   // ~880 us per byte (1136/s)
     reg     [15:0]  pace_cnt;
     reg             busy;                 // pacing out the last accepted byte
 

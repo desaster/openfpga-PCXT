@@ -491,7 +491,7 @@ module PERIPHERALS #(
             kb_bat_delay_cnt <= kb_bat_delay_cnt - 17'd1;
     end
 
-    KFPS2KB u_KFPS2KB
+    KFPS2KB #(.clk_rate(clk_rate)) u_KFPS2KB
     (
         // Bus
         .clock                      (clock),

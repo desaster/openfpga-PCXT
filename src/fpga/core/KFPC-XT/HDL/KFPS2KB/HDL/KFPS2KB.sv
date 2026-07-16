@@ -10,7 +10,9 @@
 // value (unused here); swap_video follows the video_output input, so the top level owns
 // the displayed-card select.
 //
-module KFPS2KB (
+module KFPS2KB #(
+    parameter clk_rate = 28'd50000000
+) (
     input   logic           clock,
     input   logic           reset,
 
@@ -39,7 +41,7 @@ module KFPS2KB (
     //
     // Byte front-end (parallel Set-2 in)
     //
-    KFPS2KB_Byte_Accept u_Byte_Accept (
+    KFPS2KB_Byte_Accept #(.clk_rate(clk_rate)) u_Byte_Accept (
         .clock              (clock),
         .reset              (reset),
 
