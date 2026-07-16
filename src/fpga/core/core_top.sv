@@ -280,7 +280,6 @@ module core_top (
     wire clk_100;                // 100 MHz, i8088 core
     wire clk_28_636;             // CGA dot clock
     wire clk_32_514;             // HGC dot clock (x2)
-    reg clk_14_318 = 1'b0;       // splash + UART reference
     wire clk_cpu;                // 8088 pin clock (gated)
     logic cpu_ce_posedge;        // CPU clock-enable, rising
     logic cpu_ce_negedge;        // CPU clock-enable, falling
@@ -340,8 +339,11 @@ module core_top (
     assign pll_video_hgc_locked = 1'b1;
     end endgenerate
 
+    // 14.318 MHz tick (clk_28_636 / 2): clock-enable for the splash timer and the
+    // UART baud base.
+    reg ce_14_318 = 1'b0;
     always @(posedge clk_28_636)
-        clk_14_318 <= ~clk_14_318;   // 14.318 MHz toggle for splash / UART timing
+        ce_14_318 <= ~ce_14_318;
 
     // CPU clock: XT_CE_Generator derives the 8088 pin clock and its CE strobes;
     // clk_select sets the speed and is reloaded each bus cycle (biu_done).
@@ -382,7 +384,7 @@ module core_top (
         .ram_write_wait_cycle               (ram_write_wait_cycle)
     );
 
-    // COM baud clock-enables: a clk_14_318 edge sampled onto clk_chipset (COM1),
+    // COM baud clock-enables: a ce_14_318 edge sampled onto clk_chipset (COM1),
     // divided by 8 for COM2.
     logic clk_uart_ff_1;
     logic clk_uart_ff_2;
@@ -393,7 +395,7 @@ module core_top (
 
     always @(posedge clk_chipset)
     begin
-        clk_uart_ff_1 <= clk_14_318;
+        clk_uart_ff_1 <= ce_14_318;
         clk_uart_ff_2 <= clk_uart_ff_1;
         clk_uart_ff_3 <= clk_uart_ff_2;
         clk_uart_en   <= ~clk_uart_ff_3 & clk_uart_ff_2;
@@ -1500,19 +1502,20 @@ module core_top (
     reg phys_reset_hold = 0;
     reg [23:0] phys_reset_cnt = 24'd0;
     localparam [23:0] PHYS_RESET_HOLD = 24'd2863600;
-    wire splash_on_14_cfg;
-    wire video_1st_14;
-    wire bios_ever_loaded_14;
-    synch_3 s_splash_on      (splash_cfg_74a,   splash_on_14_cfg,    clk_14_318);
-    synch_3 s_video_1st_14   (osd_video_1st,    video_1st_14,        clk_14_318);
-    synch_3 s_bios_loaded_14 (bios_ever_loaded, bios_ever_loaded_14, clk_14_318);
+    wire splash_on_28_cfg;
+    wire video_1st_28;
+    wire bios_ever_loaded_28;
+    synch_3 s_splash_on   (splash_cfg_74a,   splash_on_28_cfg,    clk_28_636);
+    synch_3 s_video_1st   (osd_video_1st,    video_1st_28,        clk_28_636);
+    synch_3 s_bios_loaded (bios_ever_loaded, bios_ever_loaded_28, clk_28_636);
     // The splash draws into CGA VRAM, so a Hercules boot skips it rather than
     // holding the machine on a blank mono screen.
-    wire splash_on_14 = splash_on_14_cfg & ~video_1st_14;
+    wire splash_on_28 = splash_on_28_cfg & ~video_1st_28;
 
-    always @ (posedge clk_14_318)
+    always @(posedge clk_28_636)
+    if (ce_14_318)
     begin
-        splash_off <= ~splash_on_14;
+        splash_off <= ~splash_on_28;
         if (RESET || buttons[1])
         begin
             phys_reset_hold <= 1'b1;
@@ -1530,7 +1533,7 @@ module core_top (
         begin
             // Hold until the BIOS has streamed in, then show the splash (or, if it is
             // disabled, release straight to POST).
-            if (bios_ever_loaded_14)
+            if (bios_ever_loaded_28)
             begin
                 if (~splash_off)
                 begin
