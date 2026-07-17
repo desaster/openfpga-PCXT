@@ -22,9 +22,9 @@
 #define FDD0_DISK_SIZE ((volatile uint32_t *) 0x3000003C) // R: floppy-0 image size in sectors
 #define FDD1_DISK_SIZE ((volatile uint32_t *) 0x30000040) // R: floppy-1 image size in sectors
 #define IDE_REQUEST    ((volatile uint32_t *) 0x30000044) // R: ide0 request [2:0]
-#define HDD0_DISK_SIZE ((volatile uint32_t *) 0x30000048) // R: hard-disk-0 image size in sectors
-#define HDD1_DISK_SIZE ((volatile uint32_t *) 0x3000004C) // R: hard-disk-1 image size in sectors
 #define FDD_REBIND     ((volatile uint32_t *) 0x30000050) // R: per-floppy image-rebind toggles
+#define DTBL_ADDR      ((volatile uint32_t *) 0x30000054) // W: datatable word index
+#define DTBL_DATA      ((volatile uint32_t *) 0x30000058) // R: datatable word at the index; W: write it
 
 // OSD GPU command registers (softcpu_subsystem), mapped in the 0x4 region. Set XY (and WH for
 // FILL/OUTLINE) then write the op; poll STATUS between commands.
@@ -163,15 +163,22 @@
 // is a few seconds of margin, never a false trip.
 #define DISK_SPIN_LIMIT 4000000u
 
-// Dataslot ids of the floppy and hard-disk images. Must match the slots in
-// data.json (and the ids core_top latches the image sizes for).
-#define FDD0_SLOT_ID 3
-#define FDD1_SLOT_ID 4
-#define HDD0_SLOT_ID 5
-#define HDD1_SLOT_ID 6
+// Dataslot ids, matching data.json. Floppy sizes arrive via the dataslot event
+// (FDD*_DISK_SIZE); HDD and Settings sizes are read from the datatable by id (slot_bytes).
+#define FDD0_SLOT_ID     3
+#define FDD1_SLOT_ID     4
+#define HDD0_SLOT_ID     5
+#define HDD1_SLOT_ID     6
+#define SETTINGS_SLOT_ID 7
+// Bytes to declare for the nonvolatile Settings slot so it flushes on first boot.
+#define SETTINGS_SLOT_BYTES 64
 
 // Shared disk-bridge sector transfer (disk_tds.c).
 int tds_transfer(uint32_t slot, uint32_t lba, uint32_t dir);
+
+// APF datatable access by slot id (disk_tds.c).
+uint32_t slot_bytes(uint16_t id);
+int slot_declare_size(uint16_t id, uint32_t bytes);
 
 // Service entry points (fdd_service.c).
 void fdd_mount(uint32_t drive, uint32_t sectors);

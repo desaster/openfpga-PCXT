@@ -16,7 +16,7 @@
 extern void timer_start(uint32_t cycles);
 extern void irq_mask(uint32_t mask);
 
-// Read a disk-size register twice and return it only if the samples agree, else 0. The
+// Read a floppy-size register twice and return it only if the samples agree, else 0. The
 // size crosses clock domains per-bit and can tear as it changes from 0 to the image size;
 // two matching reads reject a half-updated value, and the caller retries on the next poll.
 static uint32_t stable_size(volatile uint32_t *reg)
@@ -54,9 +54,16 @@ int main(void)
     uint32_t mounted_b = 0;
     uint32_t mounted_hdd = 0;
     uint32_t mounted_hdd_b = 0;
+    uint32_t settings_sized = 0;        // Settings size declared in the datatable yet
     uint32_t rebind_seen = *FDD_REBIND; // last-seen rebind toggles
 
     for (;;) {
+        // Declare the Settings size once the datatable is populated (retried because the
+        // softcore may run before the host has written the table).
+        if (!settings_sized) {
+            settings_sized = slot_declare_size(SETTINGS_SLOT_ID, SETTINGS_SLOT_BYTES);
+        }
+
         uint32_t rebind = *FDD_REBIND;
         if (!mounted_a || ((rebind ^ rebind_seen) & FDD0_REBIND_BIT)) {
             uint32_t sectors = stable_size(FDD0_DISK_SIZE);
@@ -74,14 +81,14 @@ int main(void)
         }
         rebind_seen = rebind;
         if (!mounted_hdd) {
-            uint32_t sectors = stable_size(HDD0_DISK_SIZE);
+            uint32_t sectors = slot_bytes(HDD0_SLOT_ID) / SECTOR_BYTES;
             if (sectors != 0) {
                 ide_mount(0, sectors);
                 mounted_hdd = 1;
             }
         }
         if (!mounted_hdd_b) {
-            uint32_t sectors = stable_size(HDD1_DISK_SIZE);
+            uint32_t sectors = slot_bytes(HDD1_SLOT_ID) / SECTOR_BYTES;
             if (sectors != 0) {
                 ide_mount(1, sectors);
                 mounted_hdd_b = 1;

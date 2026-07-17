@@ -628,32 +628,13 @@ module core_top (
     wire        target_dataslot_done;
     wire  [2:0] target_dataslot_err;
 
-    // Datatable scan: re-declare the Settings size (word 13, else a 0-size slot never
-    // flushes) and read the HDD sizes (words 9/11, never seen as dataslot updates).
-    // Reads land two cycles after the address.
-    reg  [2:0]  datatable_phase = 3'd0;
-    reg  [9:0]  datatable_addr  = 10'd13;
-    reg         datatable_wren  = 1'b0;
-    reg  [31:0] datatable_data  = 32'd64;
+    // Datatable port A: the disk softcore (clk_pico) reads the HDD sizes by id and
+    // re-declares the Settings size through it; port B stays on clk_74a for the APF host.
+    wire        clk_pico;
+    wire  [9:0] datatable_addr;
+    wire        datatable_wren;
+    wire [31:0] datatable_data;
     wire [31:0] datatable_q;
-    reg  [31:0] hdd0_slot_bytes_74a = 32'd0;
-    reg  [31:0] hdd1_slot_bytes_74a = 32'd0;
-    always @(posedge clk_74a) begin
-        datatable_phase <= datatable_phase + 3'd1;
-        datatable_wren  <= 1'b0;
-        case (datatable_phase)
-            3'd0: datatable_addr <= 10'd9;      // IDE 0-0 size word (index 4*2+1)
-            3'd3: begin
-                hdd0_slot_bytes_74a <= datatable_q;
-                datatable_addr      <= 10'd11;  // IDE 0-1 size word (index 5*2+1)
-            end
-            3'd6: begin
-                hdd1_slot_bytes_74a <= datatable_q;
-                datatable_addr      <= 10'd13;  // Settings size word (index 6*2+1)
-                datatable_wren      <= 1'b1;
-            end
-        endcase
-    end
 
     core_bridge_cmd icb (
         .clk                       (clk_74a),
@@ -720,6 +701,7 @@ module core_top (
         .target_dataslot_bridgeaddr(target_dataslot_bridgeaddr),
         .target_dataslot_length    (target_dataslot_length),
 
+        .clk_pico                  (clk_pico),
         .datatable_addr            (datatable_addr),
         .datatable_wren            (datatable_wren),
         .datatable_data            (datatable_data),
@@ -739,9 +721,10 @@ module core_top (
     wire  [7:0] mgmt_req;              // [7:6] fdd request, [2:0] ide0 (from CHIPSET)
     assign mgmt_req[5:3] = 3'b000;
 
-    // Floppy size arrives once as a dataslot update (bytes); HDD sizes come from the
-    // datatable scan above. Slots (match firmware *_SLOT_ID + data.json): 1 BIOS,
-    // 2 EC00 ROM, 3/4 floppy 0/1, 5/6 IDE 0/1.
+    // Floppy image size arrives in the dataslot-update event (bytes); latch it per drive.
+    // A hot-swapped floppy delivers its new size in the same event, so it is race-free with
+    // the media-change edge below. HDD and Settings sizes instead come from the datatable
+    // by id in firmware (they load only at boot / core restart).
     reg [31:0] fdd0_slot_bytes_74a = 32'd0;
     reg [31:0] fdd1_slot_bytes_74a = 32'd0;
     always @(posedge clk_74a) begin
@@ -767,8 +750,6 @@ module core_top (
 
     wire [31:0] fdd0_slot_bytes;
     wire [31:0] fdd1_slot_bytes;
-    wire [31:0] hdd0_slot_bytes;
-    wire [31:0] hdd1_slot_bytes;
     synch_3 #(.WIDTH(32)) s_fdd0_size (
         .i   (fdd0_slot_bytes_74a),
         .o   (fdd0_slot_bytes),
@@ -779,20 +760,8 @@ module core_top (
         .o   (fdd1_slot_bytes),
         .clk (clk_chipset)
     );
-    synch_3 #(.WIDTH(32)) s_hdd0_size (
-        .i   (hdd0_slot_bytes_74a),
-        .o   (hdd0_slot_bytes),
-        .clk (clk_chipset)
-    );
-    synch_3 #(.WIDTH(32)) s_hdd1_size (
-        .i   (hdd1_slot_bytes_74a),
-        .o   (hdd1_slot_bytes),
-        .clk (clk_chipset)
-    );
     wire [31:0] fdd0_disk_sectors = fdd0_slot_bytes >> 9;   // bytes / 512
     wire [31:0] fdd1_disk_sectors = fdd1_slot_bytes >> 9;   // bytes / 512
-    wire [31:0] hdd0_disk_sectors = hdd0_slot_bytes >> 9;   // bytes / 512
-    wire [31:0] hdd1_disk_sectors = hdd1_slot_bytes >> 9;   // bytes / 512
 
     wire fdd0_rebind;
     wire fdd1_rebind;
@@ -852,13 +821,16 @@ module core_top (
         .clk_sys                    (clk_chipset),
         .clk_74a                    (clk_74a),
         .reset                      (reset),
+        .clk_pico                   (clk_pico),
 
         .fdd_request                (mgmt_req[7:6]),
         .ide0_request               (mgmt_req[2:0]),
         .fdd0_disk_size             (fdd0_disk_sectors),
         .fdd1_disk_size             (fdd1_disk_sectors),
-        .hdd0_disk_size             (hdd0_disk_sectors),
-        .hdd1_disk_size             (hdd1_disk_sectors),
+        .datatable_addr             (datatable_addr),
+        .datatable_data             (datatable_data),
+        .datatable_wren             (datatable_wren),
+        .datatable_q                (datatable_q),
         .fdd0_rebind                (fdd0_rebind),
         .fdd1_rebind                (fdd1_rebind),
 

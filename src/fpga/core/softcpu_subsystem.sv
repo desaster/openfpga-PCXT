@@ -22,17 +22,25 @@ module softcpu_subsystem (
     input clk_74a,   // APF bridge clock
     input reset,
 
+    // Softcore clock, exported so core_top can clock the datatable's port A with it.
+    output reg clk_pico,
+
     // floppy.v request flags (CHIPSET fdd_request): {write-pending, read-pending}
     input [1:0] fdd_request,
 
     // ide.v request (CHIPSET ide0_request): 6=reset, 4=command, 5=data, 0=idle
     input [2:0] ide0_request,
 
-    // Mounted image size in sectors, per drive (from the host dataslot table)
+    // Mounted floppy image size in sectors, per drive (from the dataslot-update event).
     input [31:0] fdd0_disk_size,
     input [31:0] fdd1_disk_size,
-    input [31:0] hdd0_disk_size,
-    input [31:0] hdd1_disk_size,
+
+    // Datatable port A, routed on to the disk bridge (softcpu_fdd_bridge) where the
+    // firmware reads the HDD and Settings slot sizes by id.
+    output  [9:0] datatable_addr,
+    output [31:0] datatable_data,
+    output        datatable_wren,
+    input  [31:0] datatable_q,
 
     // Per-floppy-drive image-rebind toggle: flips on every dataslot update so the
     // firmware re-mounts a swapped image even at an unchanged size.
@@ -119,7 +127,6 @@ module softcpu_subsystem (
     // CPU clock: gate clk_sys down to one pulse every six cycles, about 8.3 MHz.
     //
     reg [2:0] clk_div;
-    reg       clk_pico;
     always @(posedge clk_sys) begin
         clk_div  <= (clk_div == 3'd5) ? 3'd0 : clk_div + 3'd1;
         clk_pico <= (clk_div == 3'd0);
@@ -689,8 +696,10 @@ module softcpu_subsystem (
         .ide0_request(ide0_request),
         .fdd0_disk_size(fdd0_disk_size),
         .fdd1_disk_size(fdd1_disk_size),
-        .hdd0_disk_size(hdd0_disk_size),
-        .hdd1_disk_size(hdd1_disk_size),
+        .datatable_addr(datatable_addr),
+        .datatable_data(datatable_data),
+        .datatable_wren(datatable_wren),
+        .datatable_q(datatable_q),
         .fdd0_rebind(fdd0_rebind),
         .fdd1_rebind(fdd1_rebind),
 

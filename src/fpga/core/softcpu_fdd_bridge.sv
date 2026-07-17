@@ -51,11 +51,16 @@ module softcpu_fdd_bridge #(
     // ide.v request, clk_sys: 6=reset, 4=command, 5=data phase, 0=idle
     input  wire  [2:0] ide0_request,
 
-    // Mounted image size in sectors, per drive (from the host dataslot table)
+    // Mounted floppy image size in sectors, per drive (from the dataslot-update event)
     input  wire [31:0] fdd0_disk_size,
     input  wire [31:0] fdd1_disk_size,
-    input  wire [31:0] hdd0_disk_size,
-    input  wire [31:0] hdd1_disk_size,
+
+    // Datatable port A (clk_pico): the firmware reads the HDD and Settings slot sizes by
+    // matching id, and re-declares the Settings size, through this window.
+    output wire  [9:0] datatable_addr,
+    output wire [31:0] datatable_data,
+    output wire        datatable_wren,
+    input  wire [31:0] datatable_q,
 
     // Per-floppy-drive image-rebind toggle (flips on every dataslot update), clk_sys
     input  wire        fdd0_rebind,
@@ -145,6 +150,19 @@ module softcpu_fdd_bridge #(
         bridgeram.numwords_b = 256,
         bridgeram.lpm_type = "altsyncram",
         bridgeram.intended_device_family = "Cyclone V";
+
+    //
+    // Datatable window (clk_pico). The firmware sets a word index (0x54), then reads the
+    // word (0x58) or writes it (0x58, to re-declare the Settings size). Port A is a
+    // registered read like the bridge RAM, so the index-set and the read fall in
+    // separate firmware accesses, which span enough cycles for the read to settle.
+    //
+    reg  [7:0]  dtbl_addr_r;
+    reg  [31:0] dtbl_data_r;
+    reg         dtbl_wren_r;
+    assign datatable_addr = {2'd0, dtbl_addr_r};
+    assign datatable_data = dtbl_data_r;
+    assign datatable_wren = dtbl_wren_r;
 
     //
     // Management-bus master. The firmware latches a target + drive + register and
@@ -262,9 +280,8 @@ module softcpu_fdd_bridge #(
                 8'h3C:   cpu_rdata = fdd0_disk_size;
                 8'h40:   cpu_rdata = fdd1_disk_size;
                 8'h44:   cpu_rdata = {29'd0, ide0_request};
-                8'h48:   cpu_rdata = hdd0_disk_size;
-                8'h4C:   cpu_rdata = hdd1_disk_size;
                 8'h50:   cpu_rdata = {30'd0, fdd1_rebind, fdd0_rebind};
+                8'h58:   cpu_rdata = datatable_q;
                 default: cpu_rdata = 32'd0;
             endcase
         end
@@ -284,6 +301,7 @@ module softcpu_fdd_bridge #(
         tds_read_pulse  <= 1'b0;
         tds_write_pulse <= 1'b0;
         clr_done_pulse  <= 1'b0;
+        dtbl_wren_r     <= 1'b0;
 
         cpu_valid_prev <= cpu_valid;
 
@@ -294,6 +312,8 @@ module softcpu_fdd_bridge #(
             mgmt_wdata_r   <= 16'd0;
             bram_addr_b    <= 8'd0;
             bram_data_b    <= 32'd0;
+            dtbl_addr_r    <= 8'd0;
+            dtbl_data_r    <= 32'd0;
             cpu_valid_prev <= 1'b0;
             target_dataslot_id         <= 16'd0;
             target_dataslot_slotoffset <= 32'd0;
@@ -318,6 +338,8 @@ module softcpu_fdd_bridge #(
                     if (cpu_wdata[1]) tds_write_pulse <= 1'b1;
                 end
                 8'h38: if (cpu_wdata[0]) clr_done_pulse <= 1'b1;
+                8'h54: dtbl_addr_r <= cpu_wdata[7:0];
+                8'h58: begin dtbl_data_r <= cpu_wdata; dtbl_wren_r <= 1'b1; end
             endcase
         end
 

@@ -86,6 +86,9 @@ input   wire    [31:0]  target_dataslot_slotoffset,
 input   wire    [31:0]  target_dataslot_bridgeaddr,
 input   wire    [31:0]  target_dataslot_length,
 
+// Datatable port A is clocked by the softcore (clk_pico) so the firmware can read
+// slot sizes by id; port B stays on clk for the APF host.
+input   wire            clk_pico,
 input   wire    [9:0]   datatable_addr,
 input   wire            datatable_wren,
 input   wire    [31:0]  datatable_data,
@@ -528,7 +531,7 @@ end
 mf_datatable idt (
     .address_a      ( datatable_addr ),
     .address_b      ( b_datatable_addr ),
-    .clock_a        ( clk ),
+    .clock_a        ( clk_pico ),
     .clock_b        ( clk ),
     .data_a         ( datatable_data ),
     .data_b         ( bridge_wr_data_in ),
