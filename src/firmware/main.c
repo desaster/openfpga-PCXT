@@ -28,18 +28,17 @@ static uint32_t stable_size(volatile uint32_t *reg)
 
 int main(void)
 {
-    // Start with both hard disks absent so the BIOS boots from floppy until (and
-    // unless) an image mounts; this also clears a stale-present state after a reset.
+    // Start with both hard disks absent so the BIOS boots from floppy until (and unless)
+    // an image mounts.
     ide_init();
     vkb_ui_init();
-    settings_load(); // adopt persisted settings before the timer IRQ can draw the OSD
 
-    // The cold POST runs before the saved settings are pushed, so a reset-latched
-    // 1st Video needs one more machine reset to take effect. The request clears the
-    // cold-boot flag, making this a per-power-on one-shot.
-    if (CONT1_COLDBOOT(*CONT1_KEY) && settings_video_1st()) {
-        *OSD_ACTION = OSD_ACT_RESET;
-    }
+    // The guest stays held until settings are staged: wait for the dataslot load (settings_load
+    // reads it), adopt the saved settings, then release.
+    while (!DATASLOTS_READY(*CONT1_KEY))
+        ;
+    settings_load();
+    *SOFT_GUEST_HOLD = 0;
 
     // Arm the timer and enable only its interrupt (bit 0); the fault interrupts stay
     // masked so an illegal instruction still traps rather than looping in irq().

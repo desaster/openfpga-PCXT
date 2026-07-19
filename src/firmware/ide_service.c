@@ -524,8 +524,8 @@ static void ide_set_present(uint32_t drive, int present)
     }
 }
 
-// Mark both drives absent so the BIOS finds no disk and boots from floppy. Also clears a
-// stale-present state after a warm reset before any image is mounted.
+// Mark both drives absent at cold boot so the BIOS finds no disk and boots from floppy until an
+// image mounts. Runs once before the guest is released; a warm guest reset leaves mounts intact.
 void ide_init(void)
 {
     hdd[0].present = 0;

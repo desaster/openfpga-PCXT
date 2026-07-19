@@ -20,7 +20,4 @@ int settings_input(uint16_t pressed);
 void settings_load(void);
 void settings_service(void);
 
-// Nonzero when the persisted 1st Video selection is Hercules.
-int settings_video_1st(void);
-
 #endif

@@ -147,20 +147,6 @@
         ]
       },
       {
-        "name": "Boot Splash",
-        "id": 8,
-        "type": "list",
-        "enabled": true,
-        "persist": true,
-        "writeonly": true,
-        "address": "0x68",
-        "defaultval": 1,
-        "options": [
-          { "value": 0, "name": "Off" },
-          { "value": 1, "name": "On" }
-        ]
-      },
-      {
         "name": "Extra Options",
         "id": 2,
         "type": "action",

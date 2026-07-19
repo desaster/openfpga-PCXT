@@ -20,7 +20,7 @@
 module softcpu_subsystem (
     input clk_sys,   // clk_chipset, 50 MHz
     input clk_74a,   // APF bridge clock
-    input reset,
+    input reset,     // softcore reset: FPGA infrastructure not ready, independent of the guest reset
 
     // Softcore clock, exported so core_top can clock the datatable's port A with it.
     output reg clk_pico,
@@ -89,9 +89,9 @@ module softcpu_subsystem (
     input         osd_open_req,   // interact "Extra Options" requests the settings OSD
     input   [9:0] raster_w,       // presented raster size, for overlay placement
     input   [9:0] raster_h,
-    input         cold_boot,      // no reset requested since power-on
+    input         dataslots_ready, // APF has finished the initial dataslot load
+    output        soft_guest_hold, // boot-master guest reset: held until settings are staged
     output        osd_active,
-    output        osd_reset_req,
     output        osd_credits_req,
     output        osd_video_req,
 
@@ -120,7 +120,8 @@ module softcpu_subsystem (
     output        osd_syncjoy,
     output        osd_video_1st,
     output        osd_cga_gfx,
-    output        osd_hgc_gfx
+    output        osd_hgc_gfx,
+    output        osd_splash
 );
 
     //
@@ -189,27 +190,35 @@ module softcpu_subsystem (
     end
     assign osd_active = osd_active_r;
 
-    // OSD action trigger at 0x20000010: bit0 requests a PC reset, bit1 the credits overlay,
-    // bit2 toggles the displayed video card. Reset resets the softcore too, so its request
-    // self-clears; core_top stretches reset into a clean pulse and edge-detects the others
-    // (the firmware re-arms the register with a zero write before each request).
-    reg osd_reset_req_r = 1'b0;
+    // OSD action trigger at 0x20000010: bit1 the credits overlay, bit2 toggles the displayed
+    // video card. core_top edge-detects both (the firmware re-arms the register with a zero
+    // write before each request). A guest reset is orchestrated through soft_guest_hold below,
+    // not here.
     reg osd_credits_req_r = 1'b0;
     reg osd_video_req_r = 1'b0;
     always @(posedge clk_pico) begin
         if (reset) begin
-            osd_reset_req_r   <= 1'b0;
             osd_credits_req_r <= 1'b0;
             osd_video_req_r   <= 1'b0;
         end else if (sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[4:2] == 3'd4) begin
-            osd_reset_req_r   <= cpu_mem_wdata[0];
             osd_credits_req_r <= cpu_mem_wdata[1];
             osd_video_req_r   <= cpu_mem_wdata[2];
         end
     end
-    assign osd_reset_req   = osd_reset_req_r;
     assign osd_credits_req = osd_credits_req_r;
     assign osd_video_req   = osd_video_req_r;
+
+    // Boot-master guest hold at 0x2000001C: powers up asserted so the guest stays in reset until
+    // the firmware releases it (writes 0); the firmware writes 1 to re-assert it for an
+    // orchestrated guest reset. Re-armed only by the softcore reset, not a guest reset.
+    reg soft_guest_hold_r = 1'b1;
+    always @(posedge clk_pico) begin
+        if (reset)
+            soft_guest_hold_r <= 1'b1;
+        else if (sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[4:2] == 3'd7)
+            soft_guest_hold_r <= cpu_mem_wdata[0];
+    end
+    assign soft_guest_hold = soft_guest_hold_r;
 
     // Compositor origin at 0x20000014: {y[25:16], x[9:0]}, the raster position of
     // the framebuffer's top-left; the firmware derives it from the presented
@@ -276,6 +285,7 @@ module softcpu_subsystem (
     localparam SET_IDX_VIDEO_1ST = 5'd16;
     localparam SET_IDX_CGA_GFX   = 5'd17;
     localparam SET_IDX_HGC_GFX   = 5'd18;
+    localparam SET_IDX_SPLASH    = 5'd19;
     reg [7:0] osd_settings [0:31];
     wire settings_wr = sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[4:2] == 3'd3;
     always @(posedge clk_pico) begin
@@ -302,6 +312,7 @@ module softcpu_subsystem (
     assign osd_video_1st = osd_settings[SET_IDX_VIDEO_1ST][0];
     assign osd_cga_gfx   = osd_settings[SET_IDX_CGA_GFX][0];
     assign osd_hgc_gfx   = osd_settings[SET_IDX_HGC_GFX][0];
+    assign osd_splash    = osd_settings[SET_IDX_SPLASH][0];
 
     //
     // Memory ready. The ROM read is registered, so it needs two clk_pico cycles;
@@ -733,7 +744,7 @@ module softcpu_subsystem (
         casez (cpu_mem_addr)
             32'h0???_????: cpu_mem_rdata = rom_rdata;
             32'h1???_????: cpu_mem_rdata = ram_rdata;
-            32'h2000_0000: cpu_mem_rdata = {5'd0, cold_boot, osd_open_req, credits_active, start_fn, select_fn, cont1_key};
+            32'h2000_0000: cpu_mem_rdata = {5'd0, dataslots_ready, osd_open_req, credits_active, start_fn, select_fn, cont1_key};
             32'h2000_0018: cpu_mem_rdata = {6'd0, raster_h, 6'd0, raster_w};
             32'h3???_????: cpu_mem_rdata = fdd_rdata;
             32'h4???_????: cpu_mem_rdata = gpu_status;

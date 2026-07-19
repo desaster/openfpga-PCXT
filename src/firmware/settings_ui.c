@@ -57,6 +57,7 @@ enum {
     SET_VIDEO_1ST,
     SET_CGA_GFX,
     SET_HGC_GFX,
+    SET_SPLASH,
     SET_COUNT // new settings append above: the save blob stores values by index
 };
 
@@ -105,6 +106,7 @@ static setting_t settings[SET_COUNT] = {
     SETTING(opt_video_1st),   // SET_VIDEO_1ST (applied by the BIOS at the next Reset PC)
     SETTING(opt_yes_no),      // SET_CGA_GFX (Yes = the card's I/O decode responds)
     SETTING(opt_yes_no),      // SET_HGC_GFX
+    SETTING_D(opt_off_on, 1), // SET_SPLASH (default On; read at cold boot)
 };
 
 // Compiled defaults, snapshotted at boot before the save is adopted, for Reset to Defaults.
@@ -145,6 +147,7 @@ static const item_t items_system[] = {
     { "1st Video", IT_OPTION, SET_VIDEO_1ST },
 #endif
     { "BIOS Writable", IT_OPTION, SET_BIOS_WR },
+    { "Boot Splash", IT_OPTION, SET_SPLASH },
 };
 
 static const item_t items_av[] = {
@@ -327,7 +330,14 @@ int settings_input(uint16_t pressed)
     } else if (it->type == IT_ACTION) {
         if (pressed & (BTN_A | BTN_RIGHT)) {
             if (it->arg == ACT_RESET_PC) {
-                *OSD_ACTION = OSD_ACT_RESET; // reboots the softcore with the guest
+                // Orchestrated guest reset: assert the boot-master hold (the guest re-latches
+                // the live settings when it releases), hold briefly, then release. The softcore
+                // keeps running, so disks stay mounted and the guest re-detects them.
+                *SOFT_GUEST_HOLD = 1;
+                for (volatile int i = 0; i < 1000; i++)
+                    ;
+                *SOFT_GUEST_HOLD = 0;
+                return 1; // close the panel so the re-POST shows on a clean screen
             } else if (it->arg == ACT_DEFAULTS) {
                 settings_reset_defaults();
             } else if (it->arg == ACT_CREDITS) {
@@ -383,15 +393,6 @@ void settings_load(void)
     for (uint32_t i = 0; i < SET_COUNT; i++) {
         *SETTINGS_REG = (i << 8) | settings[i].value;
     }
-}
-
-int settings_video_1st(void)
-{
-#if ENABLE_HGC
-    return settings[SET_VIDEO_1ST].value;
-#else
-    return 0;
-#endif
 }
 
 void settings_service(void)

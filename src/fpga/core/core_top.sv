@@ -461,10 +461,16 @@ module core_top (
     // Global power-on reset until all PLLs lock.
     wire RESET = ~pll_locked | ~pll_video_locked | ~pll_video_hgc_locked;
 
-    // Guest reset terms: PLL lock (RESET), ROM load and the first-BIOS gate,
-    // interact/OSD Reset PC, and the splash holds. sdram holds on lock only.
+    // The disk/OSD softcore is the boot master; it drives this hold (declared here so the guest
+    // reset can use it, sourced from u_softcpu below).
+    wire soft_guest_hold;
+
+    // Guest reset terms: PLL lock (RESET), ROM load and the first-BIOS gate, the interact
+    // Reset PC, the splash holds, and the softcore's boot-master hold (soft_guest_hold), which
+    // keeps the guest in reset until the softcore has staged settings. sdram holds on lock only.
     wire reset_wire = RESET | load_active | ~bios_ever_loaded | interact_reset
-                    | splashscreen_sync2 | splash_reset_hold | splash_pending_sync2;
+                    | splashscreen_sync2 | splash_reset_hold | splash_pending_sync2
+                    | soft_guest_hold;
     wire reset_sdram_wire = RESET;
 
     logic reset = 1'b1;
@@ -497,6 +503,27 @@ module core_top (
             reset <= 1'b0;
             reset_count <= reset_count;
         end
+    end
+
+    // The softcore is reset on PLL lock (RESET) only, so it comes up while the guest is still
+    // held and can stage settings before releasing it. It is deliberately not held by the guest
+    // terms (BIOS load, splash, the guest reset, or its own soft_guest_hold), which would deadlock.
+    logic reset_soft = 1'b1;
+    logic [15:0] reset_soft_count = 16'h0000;
+    always @(posedge clk_chipset, posedge RESET)
+    begin
+        if (RESET)
+        begin
+            reset_soft <= 1'b1;
+            reset_soft_count <= 16'h0000;
+        end
+        else if (reset_soft_count != 16'hffff)
+        begin
+            reset_soft <= 1'b1;
+            reset_soft_count <= reset_soft_count + 16'h0001;
+        end
+        else
+            reset_soft <= 1'b0;
     end
 
     logic reset_cpu_ff = 1'b1;
@@ -615,6 +642,7 @@ module core_top (
     wire [15:0] dataslot_update_id;
     wire [31:0] dataslot_update_size;
     wire        dataslot_allcomplete;
+    wire        dataslots_ready;   // sticky: APF finished the initial slot load (latched below)
     wire        osnotify_inmenu;
 
     // Target-dataslot: the disk softcore initiates host reads of floppy images.
@@ -786,7 +814,6 @@ module core_top (
     wire [3:0] osd_palette_idx;
     wire       osd_in_area;
     wire       osd_active;
-    wire       osd_reset_req;
     wire       osd_credits_req;
     wire       osd_video_req;
     wire [8:0] vkb_key;
@@ -810,17 +837,12 @@ module core_top (
     wire       osd_video_1st;
     wire       osd_cga_gfx;
     wire       osd_hgc_gfx;
-
-    // High from power-on until the softcore's first reset request; lets the firmware
-    // re-apply reset-latched settings once, after the saved values are pushed.
-    reg cold_boot = 1'b1;
-    always @(posedge clk_chipset)
-        if (osd_reset_req) cold_boot <= 1'b0;
+    wire       osd_splash;
 
     softcpu_subsystem u_softcpu (
         .clk_sys                    (clk_chipset),
         .clk_74a                    (clk_74a),
-        .reset                      (reset),
+        .reset                      (reset_soft),
         .clk_pico                   (clk_pico),
 
         .fdd_request                (mgmt_req[7:6]),
@@ -869,9 +891,9 @@ module core_top (
         .osd_open_req               (osd_open_req),
         .raster_w                   (osd_raster_w),
         .raster_h                   (osd_raster_h),
-        .cold_boot                  (cold_boot),
+        .dataslots_ready            (dataslots_ready),
+        .soft_guest_hold            (soft_guest_hold),
         .osd_active                 (osd_active),
-        .osd_reset_req              (osd_reset_req),
         .osd_credits_req            (osd_credits_req),
         .osd_video_req              (osd_video_req),
         .vkb_key                    (vkb_key),
@@ -894,7 +916,8 @@ module core_top (
         .osd_syncjoy                (osd_syncjoy),
         .osd_video_1st              (osd_video_1st),
         .osd_cga_gfx                (osd_cga_gfx),
-        .osd_hgc_gfx                (osd_hgc_gfx)
+        .osd_hgc_gfx                (osd_hgc_gfx),
+        .osd_splash                 (osd_splash)
     );
 
     //
@@ -915,7 +938,6 @@ module core_top (
     // Interact list settings: each latched write-only from its bridge address, then
     // synced into the core clock below.
     reg  [1:0] wp_cfg_74a        = 2'd0;   // floppy write-protect {B:, A:}
-    reg        splash_cfg_74a    = 1'b1;   // boot splash enable (default on)
     reg  [7:0] key_a_74a         = 8'h14;  // A default: L-Ctrl (Set-2 scancode)
     reg  [7:0] key_b_74a         = 8'h11;  // B default: L-Alt
     reg  [7:0] key_x_74a         = 8'h29;  // X default: Space
@@ -945,8 +967,6 @@ module core_top (
     end
     wire       any_btn_74a;                // any Pocket controller-1 button, synced to this domain
     synch_3 s_anybtn (|cont1_key_s, any_btn_74a, clk_74a);
-    wire       osd_reset_req_74a;          // OSD Reset PC request, synced from the softcore
-    synch_3 s_osd_reset_74a (osd_reset_req, osd_reset_req_74a, clk_74a);
     wire       osd_credits_req_74a;        // OSD Show Credits request, synced from the softcore
     synch_3 s_osd_credits_74a (osd_credits_req, osd_credits_req_74a, clk_74a);
     reg        any_btn_74a_d = 1'b0;
@@ -961,7 +981,6 @@ module core_top (
                 32'h0000_0050: interact_reset_delay <= 20'hFFFFF;  // Reset & Apply
                 32'h0000_0054: osd_open_delay       <= 20'hFFFFF;  // Extra Options (open OSD)
                 32'h0000_006C: wp_cfg_74a        <= bridge_wr_data[1:0];
-                32'h0000_0068: splash_cfg_74a    <= bridge_wr_data[0];
                 32'h0000_0080: key_a_74a         <= bridge_wr_data[7:0];
                 32'h0000_0084: key_b_74a         <= bridge_wr_data[7:0];
                 32'h0000_0088: key_x_74a         <= bridge_wr_data[7:0];
@@ -971,8 +990,6 @@ module core_top (
                 32'h0000_0098: start_cfg_74a     <= bridge_wr_data[7:0];
             endcase
         end
-        if (osd_reset_req_74a)
-            interact_reset_delay <= 20'hFFFFF;  // OSD Reset PC reuses the interact reset stretch
         // Show Credits request (from the OSD) and the any-button dismiss are edge-detected: the
         // button that picks Show Credits is still held, so a level dismiss would clear it at once.
         any_btn_74a_d         <= any_btn_74a;
@@ -1173,6 +1190,9 @@ module core_top (
     // then sync into the chipset domain for the loader and reset hold.
     reg         is_downloading_74a = 1'b0;
     reg  [15:0] download_id_74a = 16'd0;
+    // Sticky: set once APF signals the initial slot load is complete. The boot-master softcore
+    // waits on it before reading the settings slot, so it reads loaded data, not a race.
+    reg         dataslots_ready_74a = 1'b0;
     always @(posedge clk_74a) begin
         if (dataslot_requestwrite) begin
             is_downloading_74a <= 1'b1;
@@ -1180,8 +1200,11 @@ module core_top (
         end
         else if (dataslot_allcomplete)
             is_downloading_74a <= 1'b0;
+        if (dataslot_allcomplete)
+            dataslots_ready_74a <= 1'b1;
     end
     synch_3 s_isdl (is_downloading_74a, is_downloading, clk_chipset);
+    synch_3 s_dsready (dataslots_ready_74a, dataslots_ready, clk_chipset);
     wire [15:0] download_id;
     synch_3 #(.WIDTH(16)) s_dlid (download_id_74a, download_id, clk_chipset);
 
@@ -1473,9 +1496,11 @@ module core_top (
     wire splash_on_28_cfg;
     wire video_1st_28;
     wire bios_ever_loaded_28;
-    synch_3 s_splash_on   (splash_cfg_74a,   splash_on_28_cfg,    clk_28_636);
+    wire soft_guest_hold_28;
+    synch_3 s_splash_on   (osd_splash,       splash_on_28_cfg,    clk_28_636);
     synch_3 s_video_1st   (osd_video_1st,    video_1st_28,        clk_28_636);
     synch_3 s_bios_loaded (bios_ever_loaded, bios_ever_loaded_28, clk_28_636);
+    synch_3 s_soft_hold   (soft_guest_hold,  soft_guest_hold_28,  clk_28_636);
     // The splash draws into CGA VRAM, so a Hercules boot skips it rather than
     // holding the machine on a blank mono screen.
     wire splash_on_28 = splash_on_28_cfg & ~video_1st_28;
@@ -1499,9 +1524,10 @@ module core_top (
 
         if (splash_pending)
         begin
-            // Hold until the BIOS has streamed in, then show the splash (or, if it is
-            // disabled, release straight to POST).
-            if (bios_ever_loaded_28)
+            // Hold until the BIOS has streamed in and the softcore has pushed the saved settings
+            // (soft_guest_hold clears, so the splash enable is valid), then show the splash if
+            // enabled, otherwise release straight to POST.
+            if (bios_ever_loaded_28 & ~soft_guest_hold_28)
             begin
                 if (~splash_off)
                 begin

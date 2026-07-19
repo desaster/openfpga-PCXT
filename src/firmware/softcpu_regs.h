@@ -41,16 +41,16 @@
 #define GPU_CHAR_TRANSP (1u << 16)
 
 // Status / control (0x2 region).
-#define CONT1_KEY    ((volatile uint32_t *) 0x20000000) // R: pocket controller-1 buttons
-#define VKB_CTRL     ((volatile uint32_t *) 0x20000004) // W: bit0 = OSD overlay shown
-#define VKB_KEY      ((volatile uint32_t *) 0x20000008) // W: bit8 = make, bits[7:0] Set-2 code
-#define SETTINGS_REG ((volatile uint32_t *) 0x2000000C) // W: {index[12:8], value[7:0]}
-#define OSD_ACTION   ((volatile uint32_t *) 0x20000010) // W: bit0 reset, bit1 credits, bit2 video
-#define OSD_ORIGIN   ((volatile uint32_t *) 0x20000014) // W: {y[25:16], x[9:0]} framebuffer origin
-#define OSD_RASTER   ((volatile uint32_t *) 0x20000018) // R: {h[25:16], w[9:0]} presented raster size
+#define CONT1_KEY       ((volatile uint32_t *) 0x20000000) // R: pocket controller-1 buttons
+#define VKB_CTRL        ((volatile uint32_t *) 0x20000004) // W: bit0 = OSD overlay shown
+#define VKB_KEY         ((volatile uint32_t *) 0x20000008) // W: bit8 = make, bits[7:0] Set-2 code
+#define SETTINGS_REG    ((volatile uint32_t *) 0x2000000C) // W: {index[12:8], value[7:0]}
+#define OSD_ACTION      ((volatile uint32_t *) 0x20000010) // W: bit1 credits, bit2 video
+#define OSD_ORIGIN      ((volatile uint32_t *) 0x20000014) // W: {y[25:16], x[9:0]} framebuffer origin
+#define OSD_RASTER      ((volatile uint32_t *) 0x20000018) // R: {h[25:16], w[9:0]} presented raster size
+#define SOFT_GUEST_HOLD ((volatile uint32_t *) 0x2000001C) // W: bit0 = hold guest in reset
 
 // OSD_ACTION command bits.
-#define OSD_ACT_RESET   1u
 #define OSD_ACT_CREDITS 2u
 #define OSD_ACT_VIDEO   4u
 
@@ -70,12 +70,12 @@
 
 // CONT1_KEY carries the Select/Start function config and status flags in its upper bits (the
 // low 16 are the buttons): select_fn[19:16], start_fn[23:20], credits[24], osd_open[25],
-// coldboot[26].
-#define CONT1_SEL_FN(raw)   (((raw) >> 16) & 0xFu)
-#define CONT1_START_FN(raw) (((raw) >> 20) & 0xFu)
-#define CONT1_CREDITS(raw)  ((raw) & (1u << 24))
-#define CONT1_OSD_OPEN(raw) ((raw) & (1u << 25)) // interact "Extra Options" requests the OSD
-#define CONT1_COLDBOOT(raw) ((raw) & (1u << 26)) // no reset requested since power-on
+// dataslots_ready[26].
+#define CONT1_SEL_FN(raw)    (((raw) >> 16) & 0xFu)
+#define CONT1_START_FN(raw)  (((raw) >> 20) & 0xFu)
+#define CONT1_CREDITS(raw)   ((raw) & (1u << 24))
+#define CONT1_OSD_OPEN(raw)  ((raw) & (1u << 25)) // interact "Extra Options" requests the OSD
+#define DATASLOTS_READY(raw) ((raw) & (1u << 26)) // APF finished the initial dataslot load
 
 // OSD_RASTER field extractors.
 #define RASTER_W(raw) ((raw) & 0x3FFu)
