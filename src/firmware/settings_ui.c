@@ -1,5 +1,6 @@
 #include "settings_ui.h"
 
+#include "dpad.h"
 #include "key_bind.h"
 #include "softcpu_regs.h"
 #include "vkb_draw.h"
@@ -65,6 +66,8 @@ enum {
     SET_JOY2,
     SET_SWAPJOY,
     SET_SYNCJOY,
+    // Controls
+    SET_DPAD,
     SET_COUNT // new settings append above: the save blob stores values by index
 };
 
@@ -83,6 +86,8 @@ static const char *const opt_joy[] = { "Analog", "Digital", "Disabled" };
 static const char *const opt_no_yes[] = { "No", "Yes" };
 static const char *const opt_yes_no[] = { "Yes", "No" };
 static const char *const opt_video_1st[] = { "CGA", "Hercules" };
+static const char *const opt_dpad[] = { "Numpad", "Numpad w/ Diag.", "Arrows", "WASD", "HJKL",
+    "HJKL w/ YUBN" };
 
 typedef struct {
     const char *const *opts;
@@ -114,6 +119,7 @@ static setting_t settings[SET_COUNT] = {
     SETTING_D(opt_joy, 2),    // SET_JOY2 (default Disabled)
     SETTING(opt_no_yes),      // SET_SWAPJOY
     SETTING(opt_no_yes),      // SET_SYNCJOY
+    SETTING(opt_dpad),        // SET_DPAD (default Numpad)
 };
 
 // Compiled defaults, snapshotted at boot before the save is adopted, for Reset to Defaults.
@@ -179,10 +185,11 @@ static const item_t items_hw[] = {
     { "Sync Joy to CPU", IT_OPTION, SET_SYNCJOY },
 };
 
-// One row per remappable button; L1 is absent because it stays the fixed VKB toggle. Each row
-// cycles its binding through Unmapped, the OSD functions, and a key (picked on the virtual
-// keyboard); see the IT_KEYBIND handling in settings_input.
+// The D-pad direction preset, then one row per remappable button; L1 is absent because it stays the
+// fixed VKB toggle. Each button row cycles its binding through Unmapped, the OSD functions, and a
+// key (picked on the virtual keyboard); see the IT_KEYBIND handling in settings_input.
 static const item_t items_controls[] = {
+    { "D-pad", IT_OPTION, SET_DPAD },
     { "Button A", IT_KEYBIND, BIND_A },
     { "Button B", IT_KEYBIND, BIND_B },
     { "Button X", IT_KEYBIND, BIND_X },
@@ -439,13 +446,24 @@ void settings_show_credits(void)
     *OSD_ACTION = OSD_ACT_CREDITS; // rising edge -> credits overlay
 }
 
+// Drive one setting into the machine: SET_DPAD expands to the D-pad key_cfg slots, every other
+// setting drives its osd_settings register.
+static void settings_push(uint32_t i)
+{
+    if (i == SET_DPAD) {
+        dpad_apply(settings[i].value);
+    } else {
+        *SETTINGS_REG = (i << 8) | settings[i].value;
+    }
+}
+
 // Restore every setting and button binding to its compiled default, apply it live, and flag the
 // save dirty.
 static void settings_reset_defaults(void)
 {
     for (uint32_t i = 0; i < SET_COUNT; i++) {
         settings[i].value = settings_default[i];
-        *SETTINGS_REG = (i << 8) | settings[i].value;
+        settings_push(i);
     }
     key_bind_reset();
     dirty = 1;
@@ -483,9 +501,8 @@ int settings_input(uint16_t pressed)
             changed = 0;
         }
         if (changed) {
-            // Push {id, value} to the softcore settings register; the machine follows for the
-            // settings wired there. Flag dirty so the main loop refreshes the save window.
-            *SETTINGS_REG = ((uint32_t) it->arg << 8) | s->value;
+            // Drive the change into the machine and flag dirty so the main loop refreshes the save.
+            settings_push(it->arg);
             dirty = 1;
             draw_row(cur_row);
         }
@@ -607,10 +624,10 @@ void settings_load(void)
             key_bind_set(i, codes[i], (ext >> i) & 1);
         }
     }
-    // Drive every setting into the softcore register file so the machine follows the compiled
-    // defaults on a fresh boot and the saved values once a blob exists.
+    // Drive every setting into the machine so it follows the compiled defaults on a fresh boot and
+    // the saved values once a blob exists.
     for (uint32_t i = 0; i < SET_COUNT; i++) {
-        *SETTINGS_REG = (i << 8) | settings[i].value;
+        settings_push(i);
     }
 }
 

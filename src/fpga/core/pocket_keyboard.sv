@@ -41,9 +41,9 @@ module pocket_keyboard #(
     //
     // Source A: controller buttons. Synchronise cont1_key, then scan the mapped bits
     // one per clock: [0]=up [1]=down [2]=left [3]=right [4]=A [5]=B [6]=X [7]=Y, [8]=Select
-    // [9]=Start [10]=R1. D-pad is fixed to the XT keypad arrows; the buttons take their {ext, Set-2
-    // code} from key_cfg[btn_idx] (code 0 = unmapped). A button bound to an OSD function reads code 0
-    // here, and the softcore runs the function instead.
+    // [9]=Start [10]=R1. Each takes its {ext, Set-2 code} from key_cfg[btn_idx] (code 0 = unmapped):
+    // the D-pad from the chosen direction preset, the buttons from their bindings. A button bound to
+    // an OSD function reads code 0 here, and the softcore runs the function instead.
     //
     reg [10:0] btn_s0, btn_s, btn_prev, btn_mask;
     reg  [3:0] btn_idx;
@@ -54,11 +54,7 @@ module pocket_keyboard #(
     // B's mapped key into the guest).
     wire [10:0] btn_gated = {buttons[9], buttons[15], buttons[14], gamepad ? 8'd0 : buttons[7:0]};
 
-    wire [8:0] cur_key = (btn_idx == 4'd0) ? 9'h075 :  // up     -> keypad 8
-                         (btn_idx == 4'd1) ? 9'h072 :  // down   -> keypad 2
-                         (btn_idx == 4'd2) ? 9'h06B :  // left   -> keypad 4
-                         (btn_idx == 4'd3) ? 9'h074 :  // right  -> keypad 6
-                                             key_cfg[btn_idx*9 +: 9];  // idx 4-10: A/B/X/Y/Select/Start/R1
+    wire [8:0] cur_key = key_cfg[btn_idx*9 +: 9];  // 0-3 D-pad preset, 4-10 button bindings
 
     //
     // Source B: docked USB keyboard. Synchronise cont3_* from the clk_74a bridge domain,
