@@ -271,26 +271,26 @@ module softcpu_subsystem (
     // The file deliberately survives machine resets (registers power up 0): reset-latched
     // consumers like hgc_mode sample it at reset release, before the restarted firmware can
     // re-push values.
-    localparam SET_IDX_CPU_SPEED = 5'd0;
-    localparam SET_IDX_BIOS_WR   = 5'd1;
-    localparam SET_IDX_OPL2      = 5'd2;
-    localparam SET_IDX_BOOST     = 5'd3;
-    localparam SET_IDX_SPK_VOL   = 5'd4;
-    localparam SET_IDX_STEREO    = 5'd5;
-    localparam SET_IDX_CMS       = 5'd6;
-    localparam SET_IDX_COMPOSITE = 5'd7;
-    localparam SET_IDX_DISPLAY   = 5'd8;
-    localparam SET_IDX_EMS       = 5'd9;
-    localparam SET_IDX_EMS_FRAME = 5'd10;
-    localparam SET_IDX_A000      = 5'd11;
-    localparam SET_IDX_JOY1      = 5'd12;
-    localparam SET_IDX_JOY2      = 5'd13;
-    localparam SET_IDX_SWAPJOY   = 5'd14;
-    localparam SET_IDX_SYNCJOY   = 5'd15;
-    localparam SET_IDX_VIDEO_1ST = 5'd16;
-    localparam SET_IDX_CGA_GFX   = 5'd17;
-    localparam SET_IDX_HGC_GFX   = 5'd18;
-    localparam SET_IDX_SPLASH    = 5'd19;
+    localparam SET_IDX_CPU_SPEED = 5'd0;   // System
+    localparam SET_IDX_CGA_GFX   = 5'd1;
+    localparam SET_IDX_HGC_GFX   = 5'd2;
+    localparam SET_IDX_VIDEO_1ST = 5'd3;
+    localparam SET_IDX_BIOS_WR   = 5'd4;
+    localparam SET_IDX_SPLASH    = 5'd5;
+    localparam SET_IDX_OPL2      = 5'd6;   // Audio & Video
+    localparam SET_IDX_BOOST     = 5'd7;
+    localparam SET_IDX_SPK_VOL   = 5'd8;
+    localparam SET_IDX_STEREO    = 5'd9;
+    localparam SET_IDX_CMS       = 5'd10;
+    localparam SET_IDX_COMPOSITE = 5'd11;
+    localparam SET_IDX_DISPLAY   = 5'd12;
+    localparam SET_IDX_EMS       = 5'd13;  // Hardware
+    localparam SET_IDX_EMS_FRAME = 5'd14;
+    localparam SET_IDX_A000      = 5'd15;
+    localparam SET_IDX_JOY1      = 5'd16;
+    localparam SET_IDX_JOY2      = 5'd17;
+    localparam SET_IDX_SWAPJOY   = 5'd18;
+    localparam SET_IDX_SYNCJOY   = 5'd19;
     reg [7:0] osd_settings [0:31];
     wire settings_wr = sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[4:2] == 3'd3;
     always @(posedge clk_pico) begin

@@ -42,8 +42,14 @@ static const osd_fb_t panel = { PANEL_X, PANEL_Y, PANEL_W, PANEL_H };
 // `opts`); it starts at the first option here, and the option order/default is reconciled with the
 // machine when each setting is wired.
 enum {
+    // System
     SET_CPU_SPEED,
+    SET_CGA_GFX,
+    SET_HGC_GFX,
+    SET_VIDEO_1ST,
     SET_BIOS_WR,
+    SET_SPLASH,
+    // Audio & Video
     SET_OPL2,
     SET_BOOST,
     SET_SPK_VOL,
@@ -51,6 +57,7 @@ enum {
     SET_CMS,
     SET_COMPOSITE,
     SET_DISPLAY,
+    // Hardware
     SET_EMS,
     SET_EMS_FRAME,
     SET_A000,
@@ -58,10 +65,6 @@ enum {
     SET_JOY2,
     SET_SWAPJOY,
     SET_SYNCJOY,
-    SET_VIDEO_1ST,
-    SET_CGA_GFX,
-    SET_HGC_GFX,
-    SET_SPLASH,
     SET_COUNT // new settings append above: the save blob stores values by index
 };
 
@@ -92,7 +95,11 @@ typedef struct {
 
 static setting_t settings[SET_COUNT] = {
     SETTING(opt_cpu),         // SET_CPU_SPEED
+    SETTING(opt_yes_no),      // SET_CGA_GFX (Yes = the card's I/O decode responds)
+    SETTING(opt_yes_no),      // SET_HGC_GFX
+    SETTING(opt_video_1st),   // SET_VIDEO_1ST (applied by the BIOS at the next Reset PC)
     SETTING(opt_bios_wr),     // SET_BIOS_WR
+    SETTING_D(opt_off_on, 1), // SET_SPLASH (default On; read at cold boot)
     SETTING(opt_opl2),        // SET_OPL2
     SETTING(opt_boost),       // SET_BOOST
     SETTING(opt_level4),      // SET_SPK_VOL
@@ -107,10 +114,6 @@ static setting_t settings[SET_COUNT] = {
     SETTING_D(opt_joy, 2),    // SET_JOY2 (default Disabled)
     SETTING(opt_no_yes),      // SET_SWAPJOY
     SETTING(opt_no_yes),      // SET_SYNCJOY
-    SETTING(opt_video_1st),   // SET_VIDEO_1ST (applied by the BIOS at the next Reset PC)
-    SETTING(opt_yes_no),      // SET_CGA_GFX (Yes = the card's I/O decode responds)
-    SETTING(opt_yes_no),      // SET_HGC_GFX
-    SETTING_D(opt_off_on, 1), // SET_SPLASH (default On; read at cold boot)
 };
 
 // Compiled defaults, snapshotted at boot before the save is adopted, for Reset to Defaults.
@@ -553,10 +556,11 @@ int settings_input(uint16_t pressed)
 // SETTINGS_WORD, the slot's 0x60000200 address; the low 512 bytes are the disk sector buffer). APF
 // loads that window from /Saves at boot and flushes it back when the core is shut down, so the
 // softcore only keeps it current. Layout: word0 magic, word1 {version[7:0], count[15:8]}, the
-// values packed four per word, then (version 3+) the key-binding block four bytes per word. A
-// version-2 blob predates the bindings, so its settings still load and only the bindings default.
+// values packed four per word, then the key-binding block (seven codes + ext byte) four per word. A
+// blob older than version 4 predates the menu-group value layout, so it is rejected and the
+// compiled defaults load.
 #define SETTINGS_MAGIC   0x50435853u
-#define SETTINGS_VERSION 3u
+#define SETTINGS_VERSION 4u
 #define SETTINGS_WORD    128
 
 void settings_load(void)
@@ -568,7 +572,7 @@ void settings_load(void)
     uint32_t magic = *FDD_BRAM_RDATA;
     uint32_t head = *FDD_BRAM_RDATA;
     uint32_t version = head & 0xFF;
-    if (magic == SETTINGS_MAGIC && version >= 2 && version <= SETTINGS_VERSION) {
+    if (magic == SETTINGS_MAGIC && version >= 4 && version <= SETTINGS_VERSION) {
         uint32_t count = (head >> 8) & 0xFF;
         if (count > SET_COUNT) {
             count = SET_COUNT;
@@ -585,25 +589,22 @@ void settings_load(void)
             }
         }
         // The binding block follows the values (auto-incrementing read pointer): seven code bytes
-        // then the ext bitmap. Only version 3+ has it; an older blob leaves the compiled default
-        // bindings in place.
-        if (version >= 3) {
-            uint8_t codes[BIND_COUNT];
-            uint8_t ext = 0;
-            for (uint32_t i = 0; i < BIND_COUNT + 1; i++) {
-                if ((i & 3) == 0) {
-                    word = *FDD_BRAM_RDATA;
-                }
-                uint8_t b = (word >> ((i & 3) * 8)) & 0xFF;
-                if (i < BIND_COUNT) {
-                    codes[i] = b;
-                } else {
-                    ext = b;
-                }
+        // then the ext bitmap.
+        uint8_t codes[BIND_COUNT];
+        uint8_t ext = 0;
+        for (uint32_t i = 0; i < BIND_COUNT + 1; i++) {
+            if ((i & 3) == 0) {
+                word = *FDD_BRAM_RDATA;
             }
-            for (uint32_t i = 0; i < BIND_COUNT; i++) {
-                key_bind_set(i, codes[i], (ext >> i) & 1);
+            uint8_t b = (word >> ((i & 3) * 8)) & 0xFF;
+            if (i < BIND_COUNT) {
+                codes[i] = b;
+            } else {
+                ext = b;
             }
+        }
+        for (uint32_t i = 0; i < BIND_COUNT; i++) {
+            key_bind_set(i, codes[i], (ext >> i) & 1);
         }
     }
     // Drive every setting into the softcore register file so the machine follows the compiled
