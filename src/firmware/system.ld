@@ -4,7 +4,7 @@
  * region (0x4xxxxxxx), so RAM has the whole 0x1xxxxxxx data region. Addresses
  * must match the address decode in softcpu_subsystem. */
 MEMORY {
-    ROM (rx)  : ORIGIN = 0x00000000, LENGTH = 16K
+    ROM (rx)  : ORIGIN = 0x00000000, LENGTH = 24K
     RAM (rwx) : ORIGIN = 0x10000000, LENGTH = 8K
 }
 

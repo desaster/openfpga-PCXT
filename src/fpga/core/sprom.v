@@ -25,6 +25,7 @@ module sprom(clk, rst, ce, oe, addr, dout);
 	//
 	parameter aw = 10; //number of address-bits
 	parameter dw = 32; //number of data-bits
+	parameter numwords = (1 << aw); //ROM depth, for a non-power-of-two size
 	parameter MEM_INIT_FILE = "";
 
 	//
@@ -41,7 +42,7 @@ module sprom(clk, rst, ce, oe, addr, dout);
 	// Module body
 	//
 
-	reg [dw-1:0] mem [(1<<aw) -1:0];
+	reg [dw-1:0] mem [numwords-1:0];
 	reg [aw-1:0] ra;
 	reg oe_r;
 

@@ -2,6 +2,7 @@
 // requests and settings while the timer interrupt draws the OSD. The disk and OSD work
 // lives in fdd_service.c, ide_service.c, and the vkb/settings units.
 
+#include "key_bind.h"
 #include "settings_ui.h"
 #include "softcpu_regs.h"
 #include "vkb_ui.h"
@@ -37,6 +38,8 @@ int main(void)
     // reads it), adopt the saved settings, then release.
     while (!DATASLOTS_READY(*CONT1_KEY))
         ;
+    key_bind_init(); // stage the default button map, which settings_load then overrides from the
+                     // save
     settings_load();
     *SOFT_GUEST_HOLD = 0;
 

@@ -22,12 +22,7 @@ module pocket_keyboard #(
     input        osd_active,   // 1 = an overlay (OSD or credits) is up: suppress button typing
     input  [8:0] vkb_key,      // virtual-keyboard event: {make, Set-2 code}
     input        vkb_stb,      // toggles per firmware-emitted event
-    input  [7:0] cfg_a,        // Set-2 scancode per face button (0 = unmapped)
-    input  [7:0] cfg_b,
-    input  [7:0] cfg_x,
-    input  [7:0] cfg_y,
-    input  [7:0] cfg_select,   // Set-2 code for Select/Start when mapped to a key (0 when a function)
-    input  [7:0] cfg_start,
+    input [16*9-1:0] key_cfg,  // per-control {ext, Set-2 code} file; ids 4-10 are the buttons (code 0 = unmapped/function)
     input [31:0] cont3_joy,    // docked USB: HID usage codes 1-4
     input [15:0] cont3_trig,   // docked USB: HID usage codes 5-6
     input [15:0] cont3_key,    // docked USB: modifier bits (byte [15:8])
@@ -35,35 +30,35 @@ module pocket_keyboard #(
     // Set-2 scancode byte to CHIPSET's KFPS2KB; kb_ready gates one byte at a time
     output [7:0] kb_byte,
     output       kb_valid,
-    input        kb_ready
+    input        kb_ready,
+
+    // Last docked-keyboard make {ext, code} for the softcore key picker; kbd_stb toggles per make.
+    output reg [7:0] kbd_code,
+    output reg       kbd_ext,
+    output reg       kbd_stb
 );
 
     //
     // Source A: controller buttons. Synchronise cont1_key, then scan the mapped bits
     // one per clock: [0]=up [1]=down [2]=left [3]=right [4]=A [5]=B [6]=X [7]=Y, [8]=Select
-    // [9]=Start. D-pad is fixed to the XT keypad arrows; A/B/X/Y and Select/Start take their
-    // Set-2 code from the interact-menu config (cfg_*, 0 = unmapped). Select/Start read 0 when
-    // set to an OSD function (Settings or credits), which the softcore handles instead.
+    // [9]=Start [10]=R1. D-pad is fixed to the XT keypad arrows; the buttons take their {ext, Set-2
+    // code} from key_cfg[btn_idx] (code 0 = unmapped). A button bound to an OSD function reads code 0
+    // here, and the softcore runs the function instead.
     //
-    reg [9:0] btn_s0, btn_s, btn_prev, btn_mask;
-    reg [3:0] btn_idx;
+    reg [10:0] btn_s0, btn_s, btn_prev, btn_mask;
+    reg  [3:0] btn_idx;
 
-    // Key-mapped buttons before OSD gating: Select/Start always, plus (unless in joystick mode)
-    // the D-pad and A/B/X/Y face buttons. btn_mask holds those still down when the OSD closes so
-    // they cannot emit a make until released (closing the keyboard with B would otherwise type
+    // Key-mapped buttons before OSD gating: Select/Start and R1 always, plus (unless in joystick
+    // mode) the D-pad and A/B/X/Y face buttons. btn_mask holds those still down when the OSD closes
+    // so they cannot emit a make until released (closing the keyboard with B would otherwise type
     // B's mapped key into the guest).
-    wire [9:0] btn_gated = {buttons[15], buttons[14], gamepad ? 8'd0 : buttons[7:0]};
+    wire [10:0] btn_gated = {buttons[9], buttons[15], buttons[14], gamepad ? 8'd0 : buttons[7:0]};
 
-    wire [7:0] cur_code = (btn_idx == 4'd0) ? 8'h75 :  // up     -> keypad 8
-                          (btn_idx == 4'd1) ? 8'h72 :  // down   -> keypad 2
-                          (btn_idx == 4'd2) ? 8'h6B :  // left   -> keypad 4
-                          (btn_idx == 4'd3) ? 8'h74 :  // right  -> keypad 6
-                          (btn_idx == 4'd4) ? cfg_a  :
-                          (btn_idx == 4'd5) ? cfg_b  :
-                          (btn_idx == 4'd6) ? cfg_x  :
-                          (btn_idx == 4'd7) ? cfg_y  :
-                          (btn_idx == 4'd8) ? cfg_select :
-                                              cfg_start;   // idx 9 = Start
+    wire [8:0] cur_key = (btn_idx == 4'd0) ? 9'h075 :  // up     -> keypad 8
+                         (btn_idx == 4'd1) ? 9'h072 :  // down   -> keypad 2
+                         (btn_idx == 4'd2) ? 9'h06B :  // left   -> keypad 4
+                         (btn_idx == 4'd3) ? 9'h074 :  // right  -> keypad 6
+                                             key_cfg[btn_idx*9 +: 9];  // idx 4-10: A/B/X/Y/Select/Start/R1
 
     //
     // Source B: docked USB keyboard. Synchronise cont3_* from the clk_74a bridge domain,
@@ -103,6 +98,23 @@ module pocket_keyboard #(
         .ps2_key (usb_key)
     );
 
+    // Softcore key-picker tap: latch the last docked-keyboard make {ext, code}, toggling kbd_stb so
+    // the firmware can change-detect it. Independent of the queue and the OSD gate below, so it
+    // fires even while a make is being held out of the guest.
+    reg cap_stb_d;
+    always @(posedge clk) begin
+        if (reset) begin
+            cap_stb_d <= 1'b0; kbd_code <= 8'd0; kbd_ext <= 1'b0; kbd_stb <= 1'b0;
+        end else if (usb_key[10] != cap_stb_d) begin
+            cap_stb_d <= usb_key[10];
+            if (usb_key[9]) begin   // make only
+                kbd_code <= usb_key[7:0];
+                kbd_ext  <= usb_key[8];
+                kbd_stb  <= ~kbd_stb;
+            end
+        end
+    end
+
     //
     // Merge: one key event {make, code[7:0]} pushed per clock into a 16-deep
     // queue. Buttons take priority (momentary, few events); the button scanner
@@ -128,31 +140,39 @@ module pocket_keyboard #(
 
     always @(posedge clk) begin
         if (reset) begin
-            btn_s0 <= 10'd0; btn_s <= 10'd0; btn_prev <= 10'd0; btn_mask <= 10'd0; btn_idx <= 4'd0;
+            btn_s0 <= 11'd0; btn_s <= 11'd0; btn_prev <= 11'd0; btn_mask <= 11'd0; btn_idx <= 4'd0;
             usb_stb_d <= 1'b0; vkb_stb_d <= 1'b0; q_wr <= {QW{1'b0}};
         end else begin
-            // OSD open: gate all keys and hold still-down buttons masked until released.
-            btn_s0   <= osd_active ? 10'd0 : (btn_gated & ~btn_mask);
+            // OSD open: gate all keys and hold still-down buttons masked until released. The mask is
+            // also what makes a live key_cfg rebind safe: a rebind only happens with the OSD open, and
+            // a held button cannot emit until release, so a make and its break never straddle the
+            // change with mismatched codes and leave a key stuck.
+            btn_s0   <= osd_active ? 11'd0 : (btn_gated & ~btn_mask);
             btn_s    <= btn_s0;
             btn_mask <= osd_active ? btn_gated : (btn_mask & btn_gated);
 
             if (!q_full) begin
                 if (usb_pend) begin                     // docked USB keyboard: cannot wait
-                    queue[q_wr] <= {usb_key[8], usb_key[9], usb_key[7:0]};
-                    q_wr        <= q_wr + 1'b1;
-                    usb_stb_d   <= usb_key[10];
+                    usb_stb_d <= usb_key[10];           // consume the event
+                    // Hold docked makes out of the guest while an overlay is up (the key picker
+                    // still gets them via the tap above); breaks pass so a key held across the
+                    // overlay opening is released cleanly.
+                    if (!(osd_active && usb_key[9])) begin
+                        queue[q_wr] <= {usb_key[8], usb_key[9], usb_key[7:0]};
+                        q_wr        <= q_wr + 1'b1;
+                    end
                 end else if (vkb_pend) begin            // Source C: on-screen keyboard
                     queue[q_wr] <= {1'b0, vkb_key};
                     q_wr        <= q_wr + 1'b1;
                     vkb_stb_d   <= vkb_stb;
                 end else if (btn_change) begin
-                    if (cur_code != 8'h00) begin        // 0 = unmapped: consume, emit nothing
-                        queue[q_wr] <= {1'b0, btn_s[btn_idx], cur_code};
+                    if (cur_key[7:0] != 8'h00) begin    // code 0 = unmapped: consume, emit nothing
+                        queue[q_wr] <= {cur_key[8], btn_s[btn_idx], cur_key[7:0]};
                         q_wr        <= q_wr + 1'b1;
                     end
                     btn_prev[btn_idx] <= btn_s[btn_idx];
                 end else begin
-                    btn_idx <= (btn_idx == 4'd9) ? 4'd0 : btn_idx + 4'd1;   // advance scan 0..9
+                    btn_idx <= (btn_idx == 4'd10) ? 4'd0 : btn_idx + 4'd1;  // advance scan 0..10
                 end
             end
         end

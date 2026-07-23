@@ -83,8 +83,9 @@ module softcpu_subsystem (
 
     // Controller-1 buttons in; OSD-shown flag out (both firmware-facing).
     input  [15:0] cont1_key,
-    input   [3:0] select_fn,      // interact Button Select / Start function ids
-    input   [3:0] start_fn,
+    input   [7:0] dock_key_code,  // last docked-keyboard make, for the key picker
+    input         dock_key_ext,   // its E0 flag
+    input         dock_key_stb,   // toggles per docked make; firmware change-detects it
     input         credits_active, // credits overlay up: firmware suppresses OSD button input
     input         osd_open_req,   // interact "Extra Options" requests the settings OSD
     input   [9:0] raster_w,       // presented raster size, for overlay placement
@@ -121,7 +122,11 @@ module softcpu_subsystem (
     output        osd_video_1st,
     output        osd_cga_gfx,
     output        osd_hgc_gfx,
-    output        osd_splash
+    output        osd_splash,
+
+    // Per-control key config {ext, Set-2 code}, one 9-bit entry per D-pad direction and button,
+    // driven out to pocket_keyboard via core_top. Slot ids are documented at KEYCFG_REG.
+    output [16*9-1:0] key_cfg_flat
 );
 
     //
@@ -314,6 +319,23 @@ module softcpu_subsystem (
     assign osd_hgc_gfx   = osd_settings[SET_IDX_HGC_GFX][0];
     assign osd_splash    = osd_settings[SET_IDX_SPLASH][0];
 
+    // Per-control key config, written at KEYCFG_REG (0x20000020) as {id[12:9], ext[8], code[7:0]}.
+    // pocket_keyboard reads one 9-bit {ext, code} per D-pad direction (ids 0-3) and button (ids 4-10);
+    // the firmware key-binding and D-pad-preset code fill it. Separate from osd_settings so a scancode
+    // never shares a byte with an option value.
+    reg [8:0] key_cfg [0:15];
+    wire keycfg_wr = sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[5:2] == 4'd8;
+    always @(posedge clk_pico) begin
+        if (keycfg_wr)
+            key_cfg[cpu_mem_wdata[12:9]] <= cpu_mem_wdata[8:0];
+    end
+    genvar ki;
+    generate
+        for (ki = 0; ki < 16; ki = ki + 1) begin : g_key_cfg
+            assign key_cfg_flat[ki*9 +: 9] = key_cfg[ki];
+        end
+    endgenerate
+
     //
     // Memory ready. The ROM read is registered, so it needs two clk_pico cycles;
     // RAM completes in one. Any other (undecoded) access still gets a ready, so a
@@ -351,21 +373,22 @@ module softcpu_subsystem (
     assign cpu_mem_ready = cpu_mem_ready_rom | cpu_mem_ready_other;
 
     //
-    // Firmware ROM: 16 KB (4096 x 32), initialised from the built firmware image.
+    // Firmware ROM: 24 KB (6144 x 32), initialised from the built firmware image.
     // The path is relative to the Quartus project directory (src/fpga).
     //
     wire [31:0] rom_rdata;
 
     sprom #(
-        .aw(12),
+        .aw(13),
         .dw(32),
+        .numwords(6144),
         .MEM_INIT_FILE("../firmware/firmware.vh")
     ) pico_rom (
         .clk  (clk_pico),
         .rst  (reset),
         .ce   (sel_rom),
         .oe   (1'b1),
-        .addr (cpu_mem_addr[13:2]),
+        .addr (cpu_mem_addr[14:2]),
         .dout (rom_rdata)
     );
 
@@ -744,7 +767,7 @@ module softcpu_subsystem (
         casez (cpu_mem_addr)
             32'h0???_????: cpu_mem_rdata = rom_rdata;
             32'h1???_????: cpu_mem_rdata = ram_rdata;
-            32'h2000_0000: cpu_mem_rdata = {5'd0, dataslots_ready, osd_open_req, credits_active, start_fn, select_fn, cont1_key};
+            32'h2000_0000: cpu_mem_rdata = {3'd0, dock_key_stb, dock_key_ext, dataslots_ready, osd_open_req, credits_active, dock_key_code, cont1_key};
             32'h2000_0018: cpu_mem_rdata = {6'd0, raster_h, 6'd0, raster_w};
             32'h3???_????: cpu_mem_rdata = fdd_rdata;
             32'h4???_????: cpu_mem_rdata = gpu_status;

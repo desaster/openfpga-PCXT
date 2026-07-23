@@ -1,3 +1,4 @@
+#include "key_bind.h"
 #include "settings_ui.h"
 #include "softcpu_regs.h"
 #include "vkb_draw.h"
@@ -44,6 +45,8 @@ static uint32_t ui_raster;        // presented raster size, {h[25:16], w[9:0]}
 static int cur_key;               // selected key index
 static int cur_vrow;              // selected visual row
 static int held_key;              // key momentarily held by button A, -1 = none
+static int bind_target = -1;      // BIND_* being rebound in pick mode, -1 = normal typing
+static uint8_t dock_stb_prev;     // last docked-key change toggle seen, to catch a fresh press
 static uint32_t latch_bits[3];    // one bit per key index: latched keys stay down
 static uint32_t ui_repeat_timer;  // cycle deadline for the next auto-repeat
 static uint16_t ui_repeat_btn;    // dpad direction(s) held for repeat
@@ -167,6 +170,49 @@ static void cursor_move(int dx, int dy)
     vkb_key_border(&osd, cur_key, key_color(cur_key));
 }
 
+// D-pad cursor stepping, shared by typing and pick modes: a fresh press moves once; holding past
+// REPEAT_DELAY repeats at REPEAT_RATE; a short cooldown debounces each move; diagonals resolve to
+// vertical.
+static void cursor_navigate(uint16_t pressed, uint16_t buttons)
+{
+    uint16_t dpad_ev = pressed & BTN_DPAD;
+    uint32_t now = rdcycle();
+    ui_repeat_btn &= buttons; // drop any direction no longer held (stale-repeat guard)
+    if (buttons & BTN_DPAD) {
+        if (pressed & BTN_DPAD) {
+            ui_repeat_btn = buttons & BTN_DPAD;
+            ui_repeat_timer = now + REPEAT_DELAY;
+            if ((int32_t) (now - ui_move_cooldown) < 0) {
+                dpad_ev = 0;
+            }
+        } else if ((int32_t) (now - ui_repeat_timer) >= 0) {
+            dpad_ev |= ui_repeat_btn;
+            ui_repeat_timer = now + REPEAT_RATE;
+        }
+    } else {
+        ui_repeat_btn = 0;
+        ui_move_cooldown = now;
+    }
+    if ((dpad_ev & (BTN_UP | BTN_DOWN)) && (dpad_ev & (BTN_LEFT | BTN_RIGHT))) {
+        dpad_ev &= BTN_UP | BTN_DOWN;
+    }
+    if (dpad_ev & BTN_UP) {
+        cursor_move(0, -1);
+    }
+    if (dpad_ev & BTN_DOWN) {
+        cursor_move(0, 1);
+    }
+    if (dpad_ev & BTN_LEFT) {
+        cursor_move(-1, 0);
+    }
+    if (dpad_ev & BTN_RIGHT) {
+        cursor_move(1, 0);
+    }
+    if (dpad_ev) {
+        ui_move_cooldown = now + MOVE_COOLDOWN;
+    }
+}
+
 void vkb_ui_init(void)
 {
     osd.x0 = VKB_X;
@@ -218,29 +264,45 @@ static void vkb_release_all(void)
 // Force the settings OSD open from any mode; used by the Select button and the interact opener.
 static void osd_enter_settings(void)
 {
+    bind_target = -1;  // abandon any key-pick session
     vkb_release_all(); // drop any held keyboard keys before switching overlays
     ui_mode = OSD_SETTINGS;
     settings_open();
     osd_ctrl_write();
 }
 
-// Run a Select/Start button's configured OSD function. Key-mapped buttons carry fn = None and
-// type through pocket_keyboard instead.
+// Return from the key picker to the settings overlay, redrawn where it was left.
+static void picker_close(void)
+{
+    bind_target = -1;
+    ui_mode = OSD_SETTINGS;
+    settings_reopen();
+    osd_ctrl_write();
+}
+
+// A banner in the strip the keyboard leaves free, so pick mode reads differently from typing into
+// the guest.
+static void picker_draw_prompt(void)
+{
+    static const char msg[] = "A: assign    B: cancel";
+    int len = (int) sizeof(msg) - 1;
+    int bw = (len + 2) * 8;
+    int bx = (OSD_FB_WIDTH - bw) / 2;
+    int y0 = ui_osd_top ? (osd.y0 + osd.height + 8) : (osd.y0 - 24);
+    osd_fb_t bar = { 0, y0, OSD_FB_WIDTH, 16 };
+    osd_fill_rect(&bar, bx, 0, bw, 16, OSD_BODY);
+    osd_draw_string(&bar, bx + 8, 4, msg, OSD_LABEL);
+}
+
+// Run a button's configured OSD function. Only ever called in normal mode (no overlay open), so
+// nothing needs closing first; key-mapped and unmapped buttons carry fn = None and do nothing here.
 static void button_function(uint8_t fn)
 {
     switch (fn) {
     case BTNFN_SETTINGS:
-        if (ui_mode == OSD_SETTINGS) {
-            ui_mode = OSD_NONE;
-            osd_ctrl_write();
-        } else {
-            osd_enter_settings();
-        }
+        osd_enter_settings();
         break;
     case BTNFN_CREDITS:
-        vkb_release_all();
-        ui_mode = OSD_NONE; // close any overlay so the credits scroll shows on a clean screen
-        osd_ctrl_write();
         settings_show_credits();
         break;
     case BTNFN_VIDEO:
@@ -252,10 +314,55 @@ static void button_function(uint8_t fn)
     }
 }
 
+// Normal-mode button dispatch: a function binding runs here; a key binding was already typed by
+// pocket_keyboard (its cfg carries the key, a function's carries 0). This is the normal-mode input
+// owner, the counterpart to settings_input and vkb_input.
+static void dispatch_bindings(uint16_t pressed)
+{
+    static const struct {
+        uint16_t mask;
+        uint8_t btn;
+    } map[BIND_COUNT] = {
+        { BTN_A, BIND_A },
+        { BTN_B, BIND_B },
+        { BTN_X, BIND_X },
+        { BTN_Y, BIND_Y },
+        { BTN_R1, BIND_R1 },
+        { BTN_SELECT, BIND_SELECT },
+        { BTN_START, BIND_START },
+    };
+    for (int i = 0; i < BIND_COUNT; i++) {
+        if (pressed & map[i].mask) {
+            button_function(key_bind_function(map[i].btn));
+        }
+    }
+}
+
 // Keyboard-mode input: navigation and the key buttons. Nonzero when the user closed
 // the keyboard (button B), mirroring settings_input's contract.
 static int vkb_input(uint16_t pressed, uint16_t buttons)
 {
+    if (bind_target >= 0) { // pick mode: A binds the highlighted VKB key; a docked keypress binds
+                            // that physical key (reaches the E0 keys the VKB omits); B cancels
+        uint32_t raw = *CONT1_KEY;
+        if (CONT1_DOCK_STB(raw) != dock_stb_prev) { // a key was pressed on the docked keyboard
+            dock_stb_prev = CONT1_DOCK_STB(raw);
+            key_bind_set(bind_target, CONT1_DOCK_CODE(raw), CONT1_DOCK_EXT(raw));
+            settings_mark_dirty();
+            picker_close();
+            return 0;
+        }
+        if (pressed & BTN_A) {
+            key_bind_set(bind_target, vkb_keys[cur_key].scancode, 0);
+            settings_mark_dirty(); // the rebind rides the settings save
+        }
+        if (pressed & (BTN_A | BTN_B)) {
+            picker_close();
+            return 0; // picker_close already switched back to the settings overlay
+        }
+        cursor_navigate(pressed, buttons);
+        return 0;
+    }
     if (pressed & BTN_B) { // close the keyboard
         vkb_release_all();
         return 1;
@@ -266,45 +373,7 @@ static int vkb_input(uint16_t pressed, uint16_t buttons)
         osd_origin_write();
         vkb_draw_keyboard(&osd, cur_key);
     }
-    // D-pad: a fresh press moves once; holding past REPEAT_DELAY repeats at
-    // REPEAT_RATE. A short cooldown debounces each move; diagonals resolve to
-    // vertical.
-    uint16_t dpad_ev = pressed & BTN_DPAD;
-    uint32_t now = rdcycle();
-    ui_repeat_btn &= buttons; // drop any direction no longer held (stale-repeat guard)
-    if (buttons & BTN_DPAD) {
-        if (pressed & BTN_DPAD) {
-            ui_repeat_btn = buttons & BTN_DPAD;
-            ui_repeat_timer = now + REPEAT_DELAY;
-            if ((int32_t) (now - ui_move_cooldown) < 0) {
-                dpad_ev = 0;
-            }
-        } else if ((int32_t) (now - ui_repeat_timer) >= 0) {
-            dpad_ev |= ui_repeat_btn;
-            ui_repeat_timer = now + REPEAT_RATE;
-        }
-    } else {
-        ui_repeat_btn = 0;
-        ui_move_cooldown = now;
-    }
-    if ((dpad_ev & (BTN_UP | BTN_DOWN)) && (dpad_ev & (BTN_LEFT | BTN_RIGHT))) {
-        dpad_ev &= BTN_UP | BTN_DOWN;
-    }
-    if (dpad_ev & BTN_UP) {
-        cursor_move(0, -1);
-    }
-    if (dpad_ev & BTN_DOWN) {
-        cursor_move(0, 1);
-    }
-    if (dpad_ev & BTN_LEFT) {
-        cursor_move(-1, 0);
-    }
-    if (dpad_ev & BTN_RIGHT) {
-        cursor_move(1, 0);
-    }
-    if (dpad_ev) {
-        ui_move_cooldown = now + MOVE_COOLDOWN;
-    }
+    cursor_navigate(pressed, buttons);
     if (pressed & BTN_X) { // latch/unlatch (hold modifiers for chords)
         int on = !is_latched(cur_key);
         set_latched(cur_key, on);
@@ -334,10 +403,9 @@ void vkb_ui_tick(void)
         osd_origin_write();
     }
 
-    // While the credits overlay is up, any button dismisses it (core_top does that); swallow input
-    // here so the dismissing press doesn't also run a button function or re-trigger credits.
-    // credits_shown latches the flag so the press is caught even as core_top clears it the same
-    // tick.
+    // Credits overlay: any button dismisses it (core_top does that); swallow input so the
+    // dismissing press doesn't also run a binding or re-trigger credits. credits_shown latches the
+    // flag so the press is caught even as core_top clears it the same tick.
     if (credits_shown || CONT1_CREDITS(raw)) {
         credits_shown = CONT1_CREDITS(raw) != 0;
         ui_prev = buttons;
@@ -345,7 +413,7 @@ void vkb_ui_tick(void)
     }
 
     // The interact "Extra Options" action force-opens the settings OSD, edge-detected so closing it
-    // within the request window doesn't reopen. The guaranteed opener regardless of Button Select.
+    // within the request window doesn't reopen. The guaranteed opener regardless of the bindings.
     uint8_t osd_open = CONT1_OSD_OPEN(raw) != 0;
     if (osd_open && !osd_open_prev) {
         osd_enter_settings();
@@ -356,9 +424,10 @@ void vkb_ui_tick(void)
     uint16_t released = ~buttons & ui_prev;
     ui_prev = buttons;
 
-    // L1 toggles the keyboard; Select/Start run their configured OSD function (Settings or credits
-    // by default). When mapped to a key instead, fn is None and pocket_keyboard types the key.
-    if (pressed & BTN_L1) {
+    // L1 is the one always-live control: it opens and closes the virtual keyboard, the fixed
+    // overlay opener, from any mode (so a binding can never strand it). A key picker owns every
+    // button while up, so L1 stands down then.
+    if (bind_target < 0 && (pressed & BTN_L1)) {
         if (ui_mode == OSD_VKB) {
             vkb_release_all(); // nothing stays down after closing
             ui_mode = OSD_NONE;
@@ -368,34 +437,38 @@ void vkb_ui_tick(void)
         }
         osd_ctrl_write();
     }
-    if (pressed & BTN_SELECT) {
-        button_function(CONT1_SEL_FN(raw));
-    }
-    if (pressed & BTN_START) {
-        button_function(CONT1_START_FN(raw));
-    }
 
-    // Release the momentary key when A is let go, so its make is matched by a break.
-    if (held_key >= 0 && (released & BTN_A)) {
-        vkb_emit(0, vkb_keys[held_key].scancode);
-        held_key = -1;
-    }
-
+    // Every other button belongs to the active mode: an overlay consumes it for its own
+    // navigation, and normal mode dispatches the bindings (a key was already typed by the RTL, a
+    // function runs here). No button acts across modes.
     if (ui_mode == OSD_SETTINGS) {
         if (settings_input(pressed)) { // nonzero = user dismissed the overlay
             ui_mode = OSD_NONE;
             osd_ctrl_write();
         }
-        return;
-    }
-
-    // Navigation and the key buttons are suspended while a momentary key is held:
-    // a make/break scancode key cannot be momentary and latched at once, so the two
-    // are kept apart.
-    if (ui_mode == OSD_VKB && held_key < 0) {
-        if (vkb_input(pressed, buttons)) { // nonzero = user closed the keyboard
+    } else if (ui_mode == OSD_VKB) {
+        // A held momentary key suspends navigation until released (a key cannot be both momentary
+        // and latched at once), so its break is matched here rather than in vkb_input.
+        if (held_key >= 0) {
+            if (released & BTN_A) {
+                vkb_emit(0, vkb_keys[held_key].scancode);
+                held_key = -1;
+            }
+        } else if (vkb_input(pressed, buttons)) { // nonzero = user closed the keyboard
             ui_mode = OSD_NONE;
             osd_ctrl_write();
         }
+    } else {
+        dispatch_bindings(pressed);
     }
+}
+
+void vkb_ui_open_picker(int btn)
+{
+    bind_target = btn;
+    dock_stb_prev = CONT1_DOCK_STB(*CONT1_KEY); // only a fresh docked press after this counts
+    ui_mode = OSD_VKB;
+    vkb_draw_keyboard(&osd, cur_key);
+    picker_draw_prompt();
+    osd_ctrl_write();
 }

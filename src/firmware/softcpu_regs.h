@@ -49,6 +49,7 @@
 #define OSD_ORIGIN      ((volatile uint32_t *) 0x20000014) // W: {y[25:16], x[9:0]} framebuffer origin
 #define OSD_RASTER      ((volatile uint32_t *) 0x20000018) // R: {h[25:16], w[9:0]} presented raster size
 #define SOFT_GUEST_HOLD ((volatile uint32_t *) 0x2000001C) // W: bit0 = hold guest in reset
+#define KEYCFG_REG      ((volatile uint32_t *) 0x20000020) // W: {id[12:9], ext[8], code[7:0]}
 
 // OSD_ACTION command bits.
 #define OSD_ACT_CREDITS 2u
@@ -68,21 +69,22 @@
 #define BTN_SELECT (1 << 14)
 #define BTN_START  (1 << 15)
 
-// CONT1_KEY carries the Select/Start function config and status flags in its upper bits (the
-// low 16 are the buttons): select_fn[19:16], start_fn[23:20], credits[24], osd_open[25],
-// dataslots_ready[26].
-#define CONT1_SEL_FN(raw)    (((raw) >> 16) & 0xFu)
-#define CONT1_START_FN(raw)  (((raw) >> 20) & 0xFu)
+// CONT1_KEY carries status flags in its upper bits (the low 16 are the buttons): the last
+// docked-keyboard make in code[23:16] + ext[27] with a change toggle[28] for the key picker,
+// credits[24], osd_open[25], dataslots_ready[26].
 #define CONT1_CREDITS(raw)   ((raw) & (1u << 24))
-#define CONT1_OSD_OPEN(raw)  ((raw) & (1u << 25)) // interact "Extra Options" requests the OSD
-#define DATASLOTS_READY(raw) ((raw) & (1u << 26)) // APF finished the initial dataslot load
+#define CONT1_OSD_OPEN(raw)  ((raw) & (1u << 25))    // interact "Extra Options" requests the OSD
+#define DATASLOTS_READY(raw) ((raw) & (1u << 26))    // APF finished the initial dataslot load
+#define CONT1_DOCK_CODE(raw) (((raw) >> 16) & 0xFFu) // last docked-keyboard make: Set-2 code
+#define CONT1_DOCK_EXT(raw)  (((raw) >> 27) & 1u)    // its E0 flag
+#define CONT1_DOCK_STB(raw)  (((raw) >> 28) & 1u)    // toggles per docked make
 
 // OSD_RASTER field extractors.
 #define RASTER_W(raw) ((raw) & 0x3FFu)
 #define RASTER_H(raw) (((raw) >> 16) & 0x3FFu)
 
-// Button function ids the softcore routes (derived in core_top from the Select/Start config;
-// key options are handled by pocket_keyboard, not here).
+// Button function ids the softcore routes (from the binding table in key_bind.c; keyboard-key
+// bindings are typed by pocket_keyboard, not here).
 #define BTNFN_NONE     0u
 #define BTNFN_SETTINGS 1u
 #define BTNFN_CREDITS  2u

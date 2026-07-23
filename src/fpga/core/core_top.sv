@@ -837,6 +837,12 @@ module core_top (
     wire       osd_cga_gfx;
     wire       osd_hgc_gfx;
     wire       osd_splash;
+    wire [16*9-1:0] key_cfg;   // per-control {ext, Set-2 code} file from the softcore
+
+    // Last docked-keyboard make, tapped for the softcore key picker (pocket_keyboard -> softcpu).
+    wire [7:0] dock_key_code;
+    wire       dock_key_ext;
+    wire       dock_key_stb;
 
     softcpu_subsystem u_softcpu (
         .clk_sys                    (clk_chipset),
@@ -884,8 +890,9 @@ module core_top (
         .osd_in_area                (osd_in_area),
 
         .cont1_key                  (cont1_key_chip),
-        .select_fn                  (select_fn),
-        .start_fn                   (start_fn),
+        .dock_key_code              (dock_key_code),
+        .dock_key_ext               (dock_key_ext),
+        .dock_key_stb               (dock_key_stb),
         .credits_active             (credits_mode_chip),
         .osd_open_req               (osd_open_req),
         .raster_w                   (osd_raster_w),
@@ -916,7 +923,8 @@ module core_top (
         .osd_video_1st              (osd_video_1st),
         .osd_cga_gfx                (osd_cga_gfx),
         .osd_hgc_gfx                (osd_hgc_gfx),
-        .osd_splash                 (osd_splash)
+        .osd_splash                 (osd_splash),
+        .key_cfg_flat               (key_cfg)
     );
 
     //
@@ -937,13 +945,7 @@ module core_top (
     // Interact list settings: each latched write-only from its bridge address, then
     // synced into the core clock below.
     reg  [1:0] wp_cfg_74a        = 2'd0;   // floppy write-protect {B:, A:}
-    reg  [7:0] key_a_74a         = 8'h14;  // A default: L-Ctrl (Set-2 scancode)
-    reg  [7:0] key_b_74a         = 8'h11;  // B default: L-Alt
-    reg  [7:0] key_x_74a         = 8'h29;  // X default: Space
-    reg  [7:0] key_y_74a         = 8'h5A;  // Y default: Enter
     reg  [1:0] gamepad_74a       = 2'd0;   // 0 = keyboard, 1 = joystick (game port), 2 = mouse
-    reg  [7:0] select_cfg_74a    = 8'hF1;  // Button Select: 0xF1 = Settings (default)
-    reg  [7:0] start_cfg_74a     = 8'hF2;  // Button Start: 0xF2 = Pause/Credits (default)
     reg        credits_active_74a = 1'b0;  // credits showing: set by the menu action, cleared by any button
     // Pad button words come from an unvalidated ~1 ms poll and can bounce, so publish
     // a word only after it holds ~3.5 ms; analog axes are level-read and pass raw.
@@ -980,13 +982,7 @@ module core_top (
                 32'h0000_0050: interact_reset_delay <= 20'hFFFFF;  // Reset & Apply
                 32'h0000_0054: osd_open_delay       <= 20'hFFFFF;  // Extra Options (open OSD)
                 32'h0000_006C: wp_cfg_74a        <= bridge_wr_data[1:0];
-                32'h0000_0080: key_a_74a         <= bridge_wr_data[7:0];
-                32'h0000_0084: key_b_74a         <= bridge_wr_data[7:0];
-                32'h0000_0088: key_x_74a         <= bridge_wr_data[7:0];
-                32'h0000_008C: key_y_74a         <= bridge_wr_data[7:0];
                 32'h0000_0090: gamepad_74a       <= bridge_wr_data[1:0];
-                32'h0000_0094: select_cfg_74a    <= bridge_wr_data[7:0];
-                32'h0000_0098: start_cfg_74a     <= bridge_wr_data[7:0];
             endcase
         end
         // Show Credits request (from the OSD) and the any-button dismiss are edge-detected: the
@@ -1018,13 +1014,7 @@ module core_top (
     synch_3              s_interact_reset (|interact_reset_delay, interact_reset, clk_chipset);
     synch_3              s_osd_open       (|osd_open_delay,    osd_open_req,  clk_chipset);
     synch_3 #(.WIDTH(2)) s_wp_cfg         (wp_cfg_74a,        wp_cfg,        clk_chipset);
-    synch_3 #(.WIDTH(8)) s_key_a          (key_a_74a,         key_a,         clk_chipset);
-    synch_3 #(.WIDTH(8)) s_key_b          (key_b_74a,         key_b,         clk_chipset);
-    synch_3 #(.WIDTH(8)) s_key_x          (key_x_74a,         key_x,         clk_chipset);
-    synch_3 #(.WIDTH(8)) s_key_y          (key_y_74a,         key_y,         clk_chipset);
     synch_3 #(.WIDTH(2)) s_gamepad        (gamepad_74a,       gamepad_mode,  clk_chipset);
-    synch_3 #(.WIDTH(8)) s_select_cfg     (select_cfg_74a,    select_cfg,    clk_chipset);
-    synch_3 #(.WIDTH(8)) s_start_cfg      (start_cfg_74a,     start_cfg,     clk_chipset);
     synch_3 #(.WIDTH(16)) s_cont1_chip    (cont1_key_s,       cont1_key_chip, clk_chipset);
     synch_3 #(.WIDTH(16)) s_cont2_chip    (cont2_key_s,       cont2_key_chip, clk_chipset);
     synch_3 #(.WIDTH(32)) s_cont1_joy     (cont1_joy,         cont1_joy_chip, clk_chipset);
@@ -1036,21 +1026,11 @@ module core_top (
     synch_3 s_credits_chip (credits_active_74a, credits_mode_chip, clk_chipset);
     wire pause_core = pause_core_chipset | credits_mode_chip;
 
-    // Controller-button config: key_* = per-face-button Set-2 scancode; gamepad_mode
-    // picks what the pad drives (mapped keys, game port, or serial mouse).
-    wire [7:0]  key_a, key_b, key_x, key_y;
+    // gamepad_mode picks what the pad drives: mapped keys, the game port, or the serial mouse. The
+    // softcore's per-control key_cfg reaches pocket_keyboard unchanged.
     wire [1:0]  gamepad_mode;
     wire        gamepad  = (gamepad_mode == 2'd1);
     wire        mousepad = (gamepad_mode == 2'd2);
-    // Button Select/Start: 0xF1=Settings, 0xF2=Pause/Credits, 0xF3=CGA/HGC toggle, else
-    // a Set-2 key. Split into an OSD function id and a key scancode (0 for the functions).
-    wire [7:0]  select_cfg, start_cfg;
-    wire [3:0]  select_fn  = (select_cfg == 8'hF1) ? 4'd1 : (select_cfg == 8'hF2) ? 4'd2 :
-                             (select_cfg == 8'hF3) ? 4'd3 : 4'd0;
-    wire [3:0]  start_fn   = (start_cfg  == 8'hF1) ? 4'd1 : (start_cfg  == 8'hF2) ? 4'd2 :
-                             (start_cfg  == 8'hF3) ? 4'd3 : 4'd0;
-    wire [7:0]  select_key = (select_cfg < 8'hF0) ? select_cfg : 8'h00;
-    wire [7:0]  start_key  = (start_cfg  < 8'hF0) ? start_cfg  : 8'h00;
     wire [15:0] cont1_key_chip;
     wire [15:0] cont2_key_chip;
     wire [31:0] cont1_joy_chip, cont2_joy_chip;
@@ -1136,18 +1116,16 @@ module core_top (
         .osd_active   (osd_active | credits_mode_chip),
         .vkb_key      (vkb_key),
         .vkb_stb      (vkb_stb),
-        .cfg_a        (key_a),
-        .cfg_b        (key_b),
-        .cfg_x        (key_x),
-        .cfg_y        (key_y),
-        .cfg_select   (select_key),
-        .cfg_start    (start_key),
+        .key_cfg      (key_cfg),
         .cont3_joy    (cont3_joy),
         .cont3_trig   (cont3_trig),
         .cont3_key    (cont3_key),
         .kb_byte      (kb_byte),
         .kb_valid     (kb_valid),
-        .kb_ready     (kb_ready)
+        .kb_ready     (kb_ready),
+        .kbd_code     (dock_key_code),
+        .kbd_ext      (dock_key_ext),
+        .kbd_stb      (dock_key_stb)
     );
 
     //
