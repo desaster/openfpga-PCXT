@@ -39,22 +39,90 @@ module pocket_keyboard #(
 );
 
     //
-    // Source A: controller buttons. Synchronise cont1_key, then scan the mapped bits
-    // one per clock: [0]=up [1]=down [2]=left [3]=right [4]=A [5]=B [6]=X [7]=Y, [8]=Select
-    // [9]=Start [10]=R1. Each takes its {ext, Set-2 code} from key_cfg[btn_idx] (code 0 = unmapped):
-    // the D-pad from the chosen direction preset, the buttons from their bindings. A button bound to
+    // Source A: controller buttons. Synchronise cont1_key, then scan the mapped bits one per clock:
+    // [0..3] D-pad N/S/W/E, [4]=A [5]=B [6]=X [7]=Y [8]=Select [9]=Start [10]=R1, [11..14] D-pad
+    // corners NW/NE/SW/SE. Each takes its {ext, Set-2 code} from key_cfg[btn_idx] (code 0 = unmapped):
+    // the buttons from their bindings, the D-pad from the chosen direction preset. A button bound to
     // an OSD function reads code 0 here, and the softcore runs the function instead.
     //
-    reg [10:0] btn_s0, btn_s, btn_prev, btn_mask;
+    reg [14:0] btn_s0, btn_s, btn_prev, btn_mask;
     reg  [3:0] btn_idx;
 
-    // Key-mapped buttons before OSD gating: Select/Start and R1 always, plus (unless in joystick
+    // D-pad resolver. A preset that defines corner keys (key_cfg[11..14] non-zero) turns the D-pad
+    // into an eight-way hat that emits one key at a time; otherwise each direction is its own key and
+    // a diagonal press types both cardinals.
+    wire       dpad_diag = (|key_cfg[11*9 +: 8]) | (|key_cfg[12*9 +: 8])
+                         | (|key_cfg[13*9 +: 8]) | (|key_cfg[14*9 +: 8]);
+    wire [3:0] dpad_raw  = gamepad ? 4'd0 : buttons[3:0];   // up/down/left/right
+    wire       held      = |dpad_raw;
+
+    // Accumulate the pressed directions and resolve to one, opposing pairs cancelling, so a roll into
+    // a diagonal reads as one direction instead of a stray cardinal then the diagonal.
+    reg  [3:0] hat_acc;
+    wire       a_u = hat_acc[0] & ~hat_acc[1];
+    wire       a_d = hat_acc[1] & ~hat_acc[0];
+    wire       a_l = hat_acc[2] & ~hat_acc[3];
+    wire       a_r = hat_acc[3] & ~hat_acc[2];
+    // One-hot direction {SE, SW, NE, NW, E, W, S, N} of the accumulated bits.
+    wire [7:0] acc_hot = { a_d & a_r, a_d & a_l, a_u & a_r, a_u & a_l,
+                           a_r & ~a_u & ~a_d, a_l & ~a_u & ~a_d,
+                           a_d & ~a_l & ~a_r, a_u & ~a_l & ~a_r };
+
+    // Commit on release or window timeout, whichever first; hold a minimum so a tap registers, then
+    // break. A held direction repeats via the framer's typematic. The window must outlast a roll and
+    // a tap so both directions gather before it commits. dpad_com is the committed one-hot read below.
+    localparam [24:0] DPAD_WINDOW = clk_rate / 7;    // ~140 ms to gather a roll into one direction
+    localparam [24:0] DPAD_MINDN  = clk_rate / 40;   // ~25 ms minimum key-down for a tap
+    localparam [1:0]  HAT_IDLE = 2'd0, HAT_ACCUM = 2'd1, HAT_DOWN = 2'd2;
+    reg  [7:0]  dpad_com;
+    reg  [1:0]  hat_phase;
+    reg  [24:0] hat_timer;
+    always @(posedge clk) begin
+        if (reset) begin
+            hat_phase <= HAT_IDLE; hat_acc <= 4'd0; dpad_com <= 8'd0; hat_timer <= 25'd0;
+        end else case (hat_phase)
+            HAT_ACCUM: begin                            // gather directions until release or window
+                hat_acc <= hat_acc | dpad_raw;
+                if (!held || hat_timer >= DPAD_WINDOW) begin
+                    dpad_com  <= acc_hot;
+                    hat_timer <= 25'd0;
+                    hat_phase <= HAT_DOWN;
+                end else begin
+                    hat_timer <= hat_timer + 25'd1;
+                end
+            end
+            HAT_DOWN: begin                             // hold the key, then break once released
+                if (!held && hat_timer >= DPAD_MINDN) begin
+                    dpad_com  <= 8'd0;
+                    hat_acc   <= 4'd0;
+                    hat_phase <= HAT_IDLE;
+                end else if (hat_timer < DPAD_MINDN) begin
+                    hat_timer <= hat_timer + 25'd1;
+                end
+            end
+            default: begin                              // HAT_IDLE: wait for the first press
+                if (held) begin
+                    hat_acc   <= dpad_raw;
+                    hat_timer <= 25'd0;
+                    hat_phase <= HAT_ACCUM;
+                end
+            end
+        endcase
+    end
+
+    // Hat mode drives the D-pad scan slots from the settled one-hot; otherwise the raw bits drive the
+    // four cardinals and the corner slots stay idle.
+    wire [3:0] dpad_card   = dpad_diag ? dpad_com[3:0] : dpad_raw;
+    wire [3:0] dpad_corner = dpad_diag ? dpad_com[7:4] : 4'd0;
+
+    // Key-mapped controls before OSD gating: Select/Start and R1 always, plus (unless in joystick
     // mode) the D-pad and A/B/X/Y face buttons. btn_mask holds those still down when the OSD closes
     // so they cannot emit a make until released (closing the keyboard with B would otherwise type
     // B's mapped key into the guest).
-    wire [10:0] btn_gated = {buttons[9], buttons[15], buttons[14], gamepad ? 8'd0 : buttons[7:0]};
+    wire [14:0] btn_gated = { dpad_corner, buttons[9], buttons[15], buttons[14],
+                              gamepad ? 4'd0 : buttons[7:4], dpad_card };
 
-    wire [8:0] cur_key = key_cfg[btn_idx*9 +: 9];  // 0-3 D-pad preset, 4-10 button bindings
+    wire [8:0] cur_key = key_cfg[btn_idx*9 +: 9];  // 0-3/11-14 D-pad preset, 4-10 button bindings
 
     //
     // Source B: docked USB keyboard. Synchronise cont3_* from the clk_74a bridge domain,
@@ -136,14 +204,14 @@ module pocket_keyboard #(
 
     always @(posedge clk) begin
         if (reset) begin
-            btn_s0 <= 11'd0; btn_s <= 11'd0; btn_prev <= 11'd0; btn_mask <= 11'd0; btn_idx <= 4'd0;
+            btn_s0 <= 15'd0; btn_s <= 15'd0; btn_prev <= 15'd0; btn_mask <= 15'd0; btn_idx <= 4'd0;
             usb_stb_d <= 1'b0; vkb_stb_d <= 1'b0; q_wr <= {QW{1'b0}};
         end else begin
             // OSD open: gate all keys and hold still-down buttons masked until released. The mask is
             // also what makes a live key_cfg rebind safe: a rebind only happens with the OSD open, and
             // a held button cannot emit until release, so a make and its break never straddle the
             // change with mismatched codes and leave a key stuck.
-            btn_s0   <= osd_active ? 11'd0 : (btn_gated & ~btn_mask);
+            btn_s0   <= osd_active ? 15'd0 : (btn_gated & ~btn_mask);
             btn_s    <= btn_s0;
             btn_mask <= osd_active ? btn_gated : (btn_mask & btn_gated);
 
@@ -168,7 +236,7 @@ module pocket_keyboard #(
                     end
                     btn_prev[btn_idx] <= btn_s[btn_idx];
                 end else begin
-                    btn_idx <= (btn_idx == 4'd10) ? 4'd0 : btn_idx + 4'd1;  // advance scan 0..10
+                    btn_idx <= (btn_idx == 4'd14) ? 4'd0 : btn_idx + 4'd1;  // advance scan 0..14
                 end
             end
         end

@@ -1,8 +1,8 @@
 #ifndef DPAD_H
 #define DPAD_H
 
-// D-pad direction presets, chosen in the Controls submenu. Each expands to the four cardinal
-// key_cfg slots (N/S/W/E); the two roguelike presets add corner keys once the RTL resolver lands.
+// D-pad direction presets, chosen in the Controls submenu. Each expands to the D-pad key_cfg slots;
+// the two roguelike presets also define the corner keys the eight-way resolver emits.
 enum {
     DPAD_NUMPAD,      // keypad 8/2/4/6
     DPAD_NUMPAD_DIAG, // + keypad 7/9/1/3
