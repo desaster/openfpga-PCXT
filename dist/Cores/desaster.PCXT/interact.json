@@ -19,21 +19,6 @@
         ]
       },
       {
-        "name": "Gamepad Mode",
-        "id": 13,
-        "type": "list",
-        "enabled": true,
-        "persist": true,
-        "writeonly": true,
-        "address": "0x90",
-        "defaultval": 0,
-        "options": [
-          { "value": 0, "name": "Keyboard" },
-          { "value": 1, "name": "Joystick" },
-          { "value": 2, "name": "Mouse" }
-        ]
-      },
-      {
         "name": "Extra Options",
         "id": 2,
         "type": "action",

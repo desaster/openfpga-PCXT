@@ -68,6 +68,7 @@ enum {
     SET_SYNCJOY,
     // Controls
     SET_DPAD,
+    SET_GAMEPAD,
     SET_COUNT // new settings append above: the save blob stores values by index
 };
 
@@ -88,6 +89,7 @@ static const char *const opt_yes_no[] = { "Yes", "No" };
 static const char *const opt_video_1st[] = { "CGA", "Hercules" };
 static const char *const opt_dpad[] = { "Numpad", "Numpad w/ Diag.", "Arrows", "WASD", "HJKL",
     "HJKL w/ YUBN" };
+static const char *const opt_gamepad[] = { "Keyboard", "Joystick", "Mouse" };
 
 typedef struct {
     const char *const *opts;
@@ -120,6 +122,7 @@ static setting_t settings[SET_COUNT] = {
     SETTING(opt_no_yes),      // SET_SWAPJOY
     SETTING(opt_no_yes),      // SET_SYNCJOY
     SETTING(opt_dpad),        // SET_DPAD (default Numpad)
+    SETTING(opt_gamepad),     // SET_GAMEPAD (default Keyboard)
 };
 
 // Compiled defaults, snapshotted at boot before the save is adopted, for Reset to Defaults.
@@ -185,10 +188,12 @@ static const item_t items_hw[] = {
     { "Sync Joy to CPU", IT_OPTION, SET_SYNCJOY },
 };
 
-// The D-pad direction preset, then one row per remappable button; L1 is absent because it stays the
-// fixed VKB toggle. Each button row cycles its binding through Unmapped, the OSD functions, and a
-// key (picked on the virtual keyboard); see the IT_KEYBIND handling in settings_input.
+// Gamepad Mode picks what controller 1 drives: the D-pad preset and button binds below take effect
+// only in its Keyboard mode. L1 is absent because it stays the fixed VKB toggle. Each button row
+// cycles its binding through Unmapped, the OSD functions, and a key (picked on the virtual
+// keyboard); see the IT_KEYBIND handling in settings_input.
 static const item_t items_controls[] = {
+    { "Gamepad Mode", IT_OPTION, SET_GAMEPAD },
     { "D-pad", IT_OPTION, SET_DPAD },
     { "Button A", IT_KEYBIND, BIND_A },
     { "Button B", IT_KEYBIND, BIND_B },

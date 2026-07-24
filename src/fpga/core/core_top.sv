@@ -837,6 +837,7 @@ module core_top (
     wire       osd_cga_gfx;
     wire       osd_hgc_gfx;
     wire       osd_splash;
+    wire [1:0] osd_gamepad;
     wire [16*9-1:0] key_cfg;   // per-control {ext, Set-2 code} file from the softcore
 
     // Last docked-keyboard make, tapped for the softcore key picker (pocket_keyboard -> softcpu).
@@ -924,6 +925,7 @@ module core_top (
         .osd_cga_gfx                (osd_cga_gfx),
         .osd_hgc_gfx                (osd_hgc_gfx),
         .osd_splash                 (osd_splash),
+        .osd_gamepad                (osd_gamepad),
         .key_cfg_flat               (key_cfg)
     );
 
@@ -945,7 +947,6 @@ module core_top (
     // Interact list settings: each latched write-only from its bridge address, then
     // synced into the core clock below.
     reg  [1:0] wp_cfg_74a        = 2'd0;   // floppy write-protect {B:, A:}
-    reg  [1:0] gamepad_74a       = 2'd0;   // 0 = keyboard, 1 = joystick (game port), 2 = mouse
     reg        credits_active_74a = 1'b0;  // credits showing: set by the menu action, cleared by any button
     // Pad button words come from an unvalidated ~1 ms poll and can bounce, so publish
     // a word only after it holds ~3.5 ms; analog axes are level-read and pass raw.
@@ -982,7 +983,6 @@ module core_top (
                 32'h0000_0050: interact_reset_delay <= 20'hFFFFF;  // Reset & Apply
                 32'h0000_0054: osd_open_delay       <= 20'hFFFFF;  // Extra Options (open OSD)
                 32'h0000_006C: wp_cfg_74a        <= bridge_wr_data[1:0];
-                32'h0000_0090: gamepad_74a       <= bridge_wr_data[1:0];
             endcase
         end
         // Show Credits request (from the OSD) and the any-button dismiss are edge-detected: the
@@ -1014,7 +1014,6 @@ module core_top (
     synch_3              s_interact_reset (|interact_reset_delay, interact_reset, clk_chipset);
     synch_3              s_osd_open       (|osd_open_delay,    osd_open_req,  clk_chipset);
     synch_3 #(.WIDTH(2)) s_wp_cfg         (wp_cfg_74a,        wp_cfg,        clk_chipset);
-    synch_3 #(.WIDTH(2)) s_gamepad        (gamepad_74a,       gamepad_mode,  clk_chipset);
     synch_3 #(.WIDTH(16)) s_cont1_chip    (cont1_key_s,       cont1_key_chip, clk_chipset);
     synch_3 #(.WIDTH(16)) s_cont2_chip    (cont2_key_s,       cont2_key_chip, clk_chipset);
     synch_3 #(.WIDTH(32)) s_cont1_joy     (cont1_joy,         cont1_joy_chip, clk_chipset);
@@ -1028,7 +1027,7 @@ module core_top (
 
     // gamepad_mode picks what the pad drives: mapped keys, the game port, or the serial mouse. The
     // softcore's per-control key_cfg reaches pocket_keyboard unchanged.
-    wire [1:0]  gamepad_mode;
+    wire [1:0]  gamepad_mode = osd_gamepad;
     wire        gamepad  = (gamepad_mode == 2'd1);
     wire        mousepad = (gamepad_mode == 2'd2);
     wire [15:0] cont1_key_chip;

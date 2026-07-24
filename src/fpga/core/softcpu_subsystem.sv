@@ -123,6 +123,7 @@ module softcpu_subsystem (
     output        osd_cga_gfx,
     output        osd_hgc_gfx,
     output        osd_splash,
+    output  [1:0] osd_gamepad,
 
     // Per-control key config {ext, Set-2 code}, one 9-bit entry per D-pad direction and button,
     // driven out to pocket_keyboard via core_top. Slot ids are documented at KEYCFG_REG.
@@ -291,6 +292,8 @@ module softcpu_subsystem (
     localparam SET_IDX_JOY2      = 5'd17;
     localparam SET_IDX_SWAPJOY   = 5'd18;
     localparam SET_IDX_SYNCJOY   = 5'd19;
+    // index 20 is the D-pad preset, delivered through key_cfg rather than an osd_settings slot.
+    localparam SET_IDX_GAMEPAD   = 5'd21;  // Controls
     reg [7:0] osd_settings [0:31];
     wire settings_wr = sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[4:2] == 3'd3;
     always @(posedge clk_pico) begin
@@ -314,6 +317,7 @@ module softcpu_subsystem (
     assign osd_joy2      = osd_settings[SET_IDX_JOY2][1:0];
     assign osd_swapjoy   = osd_settings[SET_IDX_SWAPJOY][0];
     assign osd_syncjoy   = osd_settings[SET_IDX_SYNCJOY][0];
+    assign osd_gamepad   = osd_settings[SET_IDX_GAMEPAD][1:0];
     assign osd_video_1st = osd_settings[SET_IDX_VIDEO_1ST][0];
     assign osd_cga_gfx   = osd_settings[SET_IDX_CGA_GFX][0];
     assign osd_hgc_gfx   = osd_settings[SET_IDX_HGC_GFX][0];
