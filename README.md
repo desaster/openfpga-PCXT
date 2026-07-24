@@ -8,7 +8,7 @@ This port was done with heavy use of AI agents. The success of this project is t
 
 ## Key features
 
-* 8088 CPU with these speed settings: 4.77 MHz, 7.16 MHz, 9.54 MHz cycle accurate, and PC/AT 286 at 3.5MHz equivalent (max. speed)
+* 8088 CPU with these speed settings: 4.77 MHz, 7.16 MHz, 9.54 MHz, and PC/AT 286 at 3.5MHz equivalent (max. speed)
 * Support for IBM PCXT 5160 and clones (CGA graphics)
 * Main memory 640KB + 384KB UMB memory
 * Simulated Composite Video (CGA)
